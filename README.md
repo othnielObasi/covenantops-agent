@@ -392,6 +392,7 @@ covenantops-agent/
 
 ## Documentation
 
+- [`TECHNICAL.md`](TECHNICAL.md) — engineering reference (internals, module map, run lifecycle, integrations).
 - [`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md) — deploy on Vultr Cloud Compute + Serverless Inference.
 - `docs/CovenantOps-Agent-Executive-Summary.docx` — one-page overview.
 - `docs/CovenantOps-Agent-BRD.docx` — business requirements.

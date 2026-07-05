@@ -66,6 +66,7 @@ class TraceMemory:
             "borrower": trace.metadata.get("borrower"),
             "severity": trace.metadata.get("severity"),
             "confidence": str(trace.metadata.get("confidence")),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "payload": trace.model_dump(mode="json", by_alias=True),
         }
         if self.persistent:
@@ -85,15 +86,23 @@ class TraceMemory:
         self._mem_runs[trace.id] = rec
 
     def get_run(self, run_id: str) -> Optional[dict]:
+        rec = self.get_run_record(run_id)
+        return rec["payload"] if rec else None
+
+    def get_run_record(self, run_id: str) -> Optional[dict]:
+        """Full saved record for a run: {payload, created_at}."""
         if self.persistent:
             try:
                 with self._Session() as s:
                     row = s.get(AgentRunRow, run_id)
-                    return json.loads(row.payload) if row else None
+                    if not row:
+                        return None
+                    return {"payload": json.loads(row.payload),
+                            "created_at": row.created_at.isoformat() if row.created_at else None}
             except Exception:
                 pass
         rec = self._mem_runs.get(run_id)
-        return rec["payload"] if rec else None
+        return {"payload": rec["payload"], "created_at": rec.get("created_at")} if rec else None
 
     def list_runs(self, limit: int = 50) -> List[dict]:
         if self.persistent:
@@ -101,11 +110,13 @@ class TraceMemory:
                 with self._Session() as s:
                     rows = s.query(AgentRunRow).order_by(AgentRunRow.created_at.desc()).limit(limit).all()
                     return [{"run_id": r.run_id, "borrower": r.borrower,
-                             "severity": r.severity, "confidence": r.confidence} for r in rows]
+                             "severity": r.severity, "confidence": r.confidence,
+                             "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
             except Exception:
                 pass
         return [{"run_id": k, "borrower": v["borrower"], "severity": v["severity"],
-                 "confidence": v["confidence"]} for k, v in self._mem_runs.items()][:limit]
+                 "confidence": v["confidence"], "created_at": v.get("created_at")}
+                for k, v in self._mem_runs.items()][:limit]
 
     def save_event(self, event: dict) -> None:
         from app.models import new_id

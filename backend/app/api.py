@@ -340,6 +340,37 @@ def list_runs():
     return {"runs": _memory.list_runs(), "persistent": _memory.persistent}
 
 
+@router.get("/api/runs/{run_id}")
+def get_run_detail(run_id: str):
+    """Full outcome of a run — for opening a history entry. Live runs come from the
+    in-process store; older runs are reconstructed from durable TraceMemory."""
+    trace = _traces.get(run_id)
+    if trace is not None:
+        out = _trace_summary(trace)
+        out["archived"] = False
+        return out
+    rec = _memory.get_run_record(run_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    p = rec["payload"]
+    md = p.get("metadata", {})
+    return {
+        "trace_id": p.get("id") or run_id,
+        "borrower": md.get("borrower"),
+        "facility": md.get("facility"),
+        "severity": md.get("severity"),
+        "confidence": md.get("confidence"),
+        "guard_path": p.get("guard_path"),
+        "retrieval_path": md.get("retrieval_path"),
+        "inference_path": md.get("inference_path"),
+        "memo": p.get("final_output"),
+        "citations": md.get("citations", []),
+        "findings": md.get("findings", []),
+        "created_at": rec.get("created_at"),
+        "archived": True,
+    }
+
+
 @router.get("/api/integrations/vultr/status")
 def vultr_status():
     """Surface whether Vultr Serverless Inference is configured (judge-visible)."""

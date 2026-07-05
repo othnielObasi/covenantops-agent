@@ -221,7 +221,7 @@ class CovenantAgent:
             )
             inference_path = getattr(self.inference, "last_used", "none")
             if analyst_note:
-                memo = memo + "\n\nAnalyst note (Vultr inference):\n" + analyst_note.strip()
+                memo = memo + "\n\nAI analyst note:\n" + analyst_note.strip()
 
         # resolve overall guard path
         gp = GuardPath.none

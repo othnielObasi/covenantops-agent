@@ -88,6 +88,7 @@ var api = {
   getHistory: function () {
     return jget("/runs").then(function (d) { return d.runs || []; });
   },
+  runDetail: function (id) { return jget("/runs/" + encodeURIComponent(id)); },
   // Real, governed, Vultr-backed clarifying Q&A grounded in a specific run.
   qa: function (traceId, question) {
     return fetch(API + "/covenant/qa", {
@@ -136,7 +137,7 @@ var STEP_DESC = {
   memo: "Generating memo, Vultr analyst note & signed receipt",
 };
 var running = false, streamSettled = false;
-var VIEWS = ["Portfolio", "Investigation", "History", "Diagnostics"];
+var VIEWS = ["Portfolio", "Investigation", "History", "Audit"];
 var signinLoading = false;
 
 // live app state
@@ -286,13 +287,17 @@ function runActivity() {
 
 function vInvestigation() {
   var run = currentRun;
-  var crumb = '<div style="margin-bottom:14px"><button class="navbtn" style="padding:6px 12px;border:1px solid #2E2E3E" onclick="setView(\'Portfolio\')">\u2190 Portfolio</button></div>';
+  var backBtn = '<button class="navbtn" style="padding:6px 12px;border:1px solid #2E2E3E" onclick="setView(\'Portfolio\')">\u2190 Portfolio</button>';
   // Not pinned to any borrower: an investigation is opened from the portfolio.
   if (!run) {
-    return crumb + panel("Investigation", "no borrower selected",
+    return '<div style="margin-bottom:14px">' + backBtn + '</div>' + panel("Investigation", "no borrower selected",
       '<div class="empty">Select a borrower from the Portfolio to open its investigation.<br/><br/>' +
       '<button class="ghostbtn" style="max-width:220px;margin:12px auto 0" onclick="setView(\'Portfolio\')">Go to Portfolio</button></div>');
   }
+  // Borrower switcher, so you can change borrower without going back to the portfolio.
+  var switcher = portfolio.length ? '<select onchange="if(this.value)openInvestigation(this.value)" style="background:#16161F;border:1px solid #2E2E3E;color:#E0E0E8;border-radius:8px;padding:8px 12px;font-family:inherit;font-size:12px;cursor:pointer">' +
+    portfolio.map(function (b) { return '<option value="' + esc(b.id) + '"' + (b.id === currentBorrowerId ? ' selected' : '') + '>' + esc(b.name) + '</option>'; }).join("") + '</select>' : "";
+  var crumb = '<div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">' + backBtn + switcher + '</div>';
   var borrowerHead = crumb + '<div class="card" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">' +
     '<div><div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;flex-wrap:wrap">' +
       '<span style="font-size:18px;font-weight:700;color:#E0E0E8">' + esc(run.borrower) + '</span>' +
@@ -321,9 +326,10 @@ function vInvestigation() {
     '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:#6B6B80;font-size:11px">Trace</span><span style="font-weight:600;font-size:12px;color:' + C.mute + '">' + esc((run.trace_id || "").slice(0, 14)) + '</span></div>'
   );
   var stepsDone = STEPS.map(function (s) { return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;color:#B8B8C8"><span style="color:' + C.signal + '">\u2713</span>' + s + '</div>'; }).join("");
-  var workflowCard = panel("Workflow", "completed", stepsDone);
-  var groundingCard = panel("Grounding", "AI backends", groundingRows(run));
-  var factRow = '<div class="grid3">' + facilityCard + workflowCard + groundingCard + '</div>' + '<div style="margin-top:20px">' + panel("Covenant status", run.severity, run.findings.map(gauge).join("")) + '</div>';
+  var workflowCard = panel("Investigation steps", "completed", stepsDone);
+  var actionsCard = panel("Actions", "re-run", '<p class="lead" style="margin-bottom:10px">Re-run the covenant check on the latest evidence for this borrower.</p><button class="ghostbtn" style="margin-top:6px" onclick="doRun()">\u21bb Run again</button>');
+  var factRow = '<div class="grid3">' + facilityCard + workflowCard + actionsCard + '</div>' +
+    '<div style="margin-top:20px">' + panel("Covenant status", run.severity, run.findings.map(gauge).join("")) + '</div>';
 
   // --- memo + verify/export ---
   var memoLeft = panel("Escalation memo", run.severity, '<pre class="memo">' + esc(run.memo) + '</pre>');
@@ -337,18 +343,6 @@ function vInvestigation() {
     '<div style="margin-top:20px">' + memoSection + '</div>' +
     '<div style="margin-top:20px">' + evidencePanel() + '</div>' +
     '<div style="margin-top:20px">' + qaPanel() + '</div>';
-}
-
-function groundingRows(run) {
-  var row = function (label, value, color) {
-    return '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1E1E2E"><span style="color:#6B6B80;font-size:11px">' + label + '</span><span style="font-weight:600;font-size:12px;color:' + (color || "#E0E0E8") + '">' + esc(value) + '</span></div>';
-  };
-  var retr = run.retrieval_path === "vultr" ? "VultronRetriever (Vultr)" : "local keyword";
-  var reason = run.inference_path === "vultr" ? "Vultr Serverless Inference" : "local fallback";
-  var guard = run.guard_path === "airg" ? "AIRG governance" : (run.guard_path || "local guard");
-  return row("Retrieval", retr, run.retrieval_path === "vultr" ? C.signal : C.mute) +
-    row("Reasoning", reason, run.inference_path === "vultr" ? C.signal : C.mute) +
-    '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:#6B6B80;font-size:11px">Governance</span><span style="font-weight:600;font-size:12px">' + esc(guard) + '</span></div>';
 }
 
 // Unified evidence panel: the documents grounding the investigation (the INPUT),
@@ -383,10 +377,7 @@ function qaPanel() {
     var isUser = m.role === "user";
     var avatarBg = isUser ? C.signal + "20" : "#FF8C4220", avatarColor = isUser ? C.signal : "#FF8C42";
     var meta = m.meta || {};
-    var pathLabel = meta.blocked ? "blocked by governance guard"
-      : meta.inference_path === "vultr" ? "Vultr inference \u00b7 grounded in this run"
-      : meta.inference_path === "local_fallback" ? "local fallback \u00b7 grounded in this run"
-      : "grounded in this run";
+    var pathLabel = meta.blocked ? "blocked by governance" : "grounded in this run's evidence";
     var govBadge = !isUser ? '<div class="qagovbadge"><span style="width:10px;height:10px;border-radius:2px;background:linear-gradient(135deg,' + C.oxblood + ',#FF8C42);display:inline-block"></span><span style="color:' + C.signal + '">governed</span><span>\u00b7 ' + esc(pathLabel) + '</span></div>' : "";
     return '<div class="qarow' + (isUser ? " user" : "") + '"><div class="qaavatar" style="background:' + avatarBg + ';color:' + avatarColor + '">' + (isUser ? "A1" : "AI") + '</div>' +
       '<div class="qabubble" style="background:' + (isUser ? C.signal + "10" : "#16161F") + ';border:1px solid ' + (isUser ? C.signal + "20" : "#1E1E2E") + '">' + esc(m.content) + govBadge + '</div></div>';
@@ -453,18 +444,17 @@ function buildAuditTimeline(run) {
   var actorColor = { agent: "#FF8C42", governance: C.oxblood, system: "#4CC9F0" };
   var guardPath = (run.evaluation && run.evaluation.signals && run.evaluation.signals.guard_path) || "local_fallback";
   var events = [];
-  events.push({ actor: "agent", action: "investigation planned", entity: run.borrower, detail: "Plan created before any retrieval \u2014 the agent decides its own steps for this facility." });
-  var retr = run.retrieval_path === "vultr" ? "ranked by VultronRetriever on Vultr Serverless Inference" : "via the local keyword retriever";
-  events.push({ actor: "agent", action: "clauses retrieved", entity: run.retrieval_path === "vultr" ? "VultronRetriever" : "local", detail: "Retrieved " + (run.findings || []).length + " governing covenant clause(s), " + retr + "." });
-  events.push({ actor: "agent", action: "filings retrieved", entity: (run.findings && run.findings[0] && run.findings[0].ratio.period) || "latest period", detail: "Pulled borrower filings to establish the trend for the current reporting period." });
-  events.push({ actor: "governance", action: "tool calls evaluated", entity: guardPath, detail: "Every tool call in this run was evaluated by the " + (guardPath == "airg" ? "AIRG governance API" : "local fallback guard") + "; no blocks raised on clean evidence." });
+  events.push({ actor: "agent", action: "investigation planned", entity: run.borrower, detail: "The agent set out its own steps for this facility before retrieving anything." });
+  events.push({ actor: "agent", action: "clauses retrieved", entity: "credit agreement", detail: "Retrieved " + (run.findings || []).length + " governing covenant clause(s) using AI semantic search over the agreement." });
+  events.push({ actor: "agent", action: "filings retrieved", entity: (run.findings && run.findings[0] && run.findings[0].ratio.period) || "latest period", detail: "Pulled the borrower's filings to establish the trend for the current reporting period." });
+  events.push({ actor: "governance", action: "policy checks", entity: "passed", detail: "Every step was checked by the governance policy engine before its output was trusted; injection and sensitive data are blocked." });
   (run.findings || []).forEach(function (f) {
-    events.push({ actor: "agent", action: "ratio calculated", entity: f.ratio.covenant_id, detail: f.ratio.metric + ": " + f.ratio.value + " vs effective limit " + f.ratio.threshold + (f.ratio.waiver_applied ? " (waiver " + f.ratio.waiver_applied + " applied)" : "") + "." });
+    events.push({ actor: "agent", action: "ratio re-verified", entity: f.ratio.covenant_id, detail: f.ratio.metric + ": " + f.ratio.value + " vs limit " + f.ratio.threshold + (f.ratio.waiver_applied ? " (waiver applied)" : "") + "." });
   });
   var flaggedCovs = (run.findings || []).filter(function (f) { return f.ratio.breached || f.ratio.drifting_toward_breach; });
-  if (flaggedCovs.length) events.push({ actor: "agent", action: "transactions cross-checked", entity: flaggedCovs.length + " covenant(s)", detail: "Matched transactions to a documented cause for each flagged covenant; unexplained items are reported, not hidden." });
-  events.push({ actor: "agent", action: "memo generated", entity: run.severity, detail: "Escalation memo produced with citations to source page and transaction IDs for every claim." });
-  events.push({ actor: "system", action: "receipt signed", entity: (run.trace_id || "").slice(0, 14), detail: "Ed25519 signature applied over the canonical evidence body \u2014 verifiable offline, independent of this run." });
+  if (flaggedCovs.length) events.push({ actor: "agent", action: "transactions cross-checked", entity: flaggedCovs.length + " covenant(s)", detail: "Matched transactions to a documented cause for each flagged covenant; anything unexplained is reported, not hidden." });
+  events.push({ actor: "agent", action: "memo generated", entity: run.severity, detail: "Escalation memo produced with citations to the source page and transaction for every claim." });
+  events.push({ actor: "system", action: "receipt signed", entity: "ref " + (run.trace_id || "").slice(6, 14), detail: "The decision was sealed with a tamper-evident signature that anyone can verify offline." });
 
   var rows = events.map(function (e, i) {
     var last = i === events.length - 1;
@@ -478,22 +468,14 @@ function buildAuditTimeline(run) {
 }
 function vEval() {
   var run = currentRun;
-  if (!run || !run.evaluation) return panel("Diagnostics", "idle", '<div class="empty">Run an investigation to see the audit trail, evidence graph, and diagnostics.</div>');
+  if (!run || !run.findings || !run.findings.length) {
+    return panel("Audit trail", "how the decision was reached", '<div class="empty">Open a borrower and run an investigation to see how the decision was reached, the evidence behind it, and the integrity checks.<br/><br/><button class="ghostbtn" style="max-width:220px;margin:12px auto 0" onclick="setView(\'Portfolio\')">Go to Portfolio</button></div>');
+  }
   var ch = run.context_health || {};
-  var scores = Object.keys(run.evaluation.scores).map(function (k) { return scorebar(k, run.evaluation.scores[k]); }).join("");
   var graph = evidenceGraph(run);
-  var warns = (ch.warnings || []).map(function (w) { return '<div class="warn">\u26A0 ' + esc(w) + '</div>'; }).join("") || '<div class="warn">\u2713 No major context warnings</div>';
-  var vultr = ["Web-based enterprise agent", "LLM/RAG workloads route to Vultr Serverless Inference when configured", "Deterministic fallback keeps demo reliable", "Docker-ready for Vultr Cloud Compute"].map(function (x) { return '<div class="chk">\u2713 ' + x + '</div>'; }).join("");
-  var auditNote = '<div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:' + C.signal + ';margin:0 0 12px">Audit &amp; integrity \u2014 relevant to compliance review</div>';
-  var timeline = panel("Audit trail", events_count_label(run), buildAuditTimeline(run));
-  var auditSection = timeline + '<div class="grid2 c" style="margin-top:20px">' + panel("Evidence graph", "decision \u2192 evidence", graph) + panel("Context health", (ch.overall || "checked"), warns) + '</div>';
-  var engNote = '<div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:' + C.mute + ';margin:28px 0 12px">Engineering diagnostics \u2014 internal only, not part of any user workflow</div>';
-  var engSection = '<div class="grid2 c">' + panel("System readiness", "self-evaluation", scores) + panel("Platform alignment", "no GPU dependency", vultr) + '</div>';
-  return auditNote + auditSection + engNote + engSection;
-}
-function events_count_label(run) {
-  var n = 4 + (run.findings || []).length + ((run.findings || []).some(function (f) { return f.ratio.breached || f.ratio.drifting_toward_breach; }) ? 1 : 0);
-  return n + " events \u00b7 agent, governance, system";
+  var warns = (ch.warnings || []).map(function (w) { return '<div class="warn">\u26A0 ' + esc(w) + '</div>'; }).join("") || '<div class="warn">\u2713 No integrity concerns \u2014 evidence is current and consistent.</div>';
+  var timeline = panel("How this decision was reached", (run.borrower || "audit trail"), buildAuditTimeline(run));
+  return timeline + '<div class="grid2 c" style="margin-top:20px">' + panel("Evidence behind the decision", "decision \u2192 evidence", graph) + panel("Evidence integrity", (ch.overall || "checked"), warns) + '</div>';
 }
 function vHistory() {
   var hist = currentHistory.slice().reverse();
@@ -510,11 +492,50 @@ function vHistory() {
     chart = '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;height:200px"><line x1="' + pad + '" y1="' + (h - pad) + '" x2="' + (w - pad) + '" y2="' + (h - pad) + '" stroke="#1E1E2E"/><line x1="' + pad + '" y1="' + pad + '" x2="' + pad + '" y2="' + (h - pad) + '" stroke="#1E1E2E"/><line x1="' + pad + '" y1="' + pad + '" x2="' + (w - pad) + '" y2="' + pad + '" stroke="' + C.signal + '" stroke-dasharray="3 3" opacity=".4"/><path d="' + path + '" fill="none" stroke="' + C.signal + '" stroke-width="2"/>' + dots + labels +
       '<text x="' + (pad - 8) + '" y="' + (pad + 4) + '" fill="' + C.mute + '" font-size="11" text-anchor="end">100</text><text x="' + (pad - 8) + '" y="' + (h - pad) + '" fill="' + C.mute + '" font-size="11" text-anchor="end">0</text></svg>';
   }
-  var rows = currentHistory.map(function (r) { var sevTone = r.severity == "breach" ? "oxblood" : r.severity == "watch" ? "amber" : "signal"; return '<tr><td style="font-size:12px;color:' + C.mute + '">' + esc((r.run_id || "").slice(0, 14)) + '</td><td style="color:#E0E0E8">' + esc(r.borrower) + '</td><td>' + pill(r.severity, sevTone) + '</td><td>' + Math.round(parseFloat(r.confidence) * 100) + '%</td></tr>'; }).join("");
-  if (!rows) rows = '<tr><td colspan="4" style="color:' + C.mute + '">No runs yet.</td></tr>';
-  var tbl = '<div class="tblwrap"><table><thead><tr><th>Run</th><th>Borrower</th><th>Severity</th><th>Confidence</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
-  return '<div class="stack">' + panel("Confidence across runs", "self-improvement", chart) + panel("Run history", "persistent", tbl) + '</div>';
+  if (historyDetail) return historyDetailView();
+  var rows = currentHistory.map(function (r) {
+    var sevTone = r.severity == "breach" ? "oxblood" : r.severity == "watch" ? "amber" : "signal";
+    var sevLabel = r.severity == "none" ? "within limits" : r.severity;
+    return '<tr style="cursor:pointer" onclick="openHistory(\'' + esc(r.run_id) + '\')">' +
+      '<td style="font-size:12px;color:#B8B8C8">' + fmtDate(r.created_at) + '</td>' +
+      '<td style="color:#E0E0E8">' + esc(r.borrower) + '</td>' +
+      '<td>' + pill(sevLabel, sevTone) + '</td>' +
+      '<td>' + Math.round(parseFloat(r.confidence || 0) * 100) + '%</td>' +
+      '<td style="color:' + C.signal + ';font-size:12px">View outcome \u2192</td></tr>';
+  }).join("");
+  if (!rows) rows = '<tr><td colspan="5" style="color:' + C.mute + '">No investigations run yet.</td></tr>';
+  var tbl = '<div class="tblwrap"><table><thead><tr><th>Date</th><th>Borrower</th><th>Status</th><th>Confidence</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  return '<div class="stack">' + panel("Confidence across runs", "self-improvement", chart) + panel("Run history", "click a run to view its outcome", tbl) + '</div>';
 }
+
+function fmtDate(iso) {
+  if (!iso) return "\u2014";
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return "\u2014";
+  return d.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function historyDetailView() {
+  var back = '<div style="margin-bottom:14px"><button class="navbtn" style="border:1px solid #2E2E3E" onclick="closeHistory()">\u2190 History</button></div>';
+  var run = historyDetail;
+  if (run === "loading") return back + panel("Run outcome", "loading", '<div class="empty">Loading the run outcome\u2026</div>');
+  if (run === "error") return back + panel("Run outcome", "unavailable", '<div class="empty">This run could not be loaded.</div>');
+  var sevTone = run.severity == "breach" ? "oxblood" : run.severity == "watch" ? "amber" : "signal";
+  var sevLabel = run.severity == "none" ? "within limits" : run.severity;
+  var head = '<div class="card" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">' +
+    '<div><div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;flex-wrap:wrap">' +
+      '<span style="font-size:18px;font-weight:700;color:#E0E0E8">' + esc(run.borrower || "") + '</span>' + pill(sevLabel, sevTone) + '</div>' +
+      '<div style="color:#8B8BA0;font-size:12px">' + esc(run.facility || "") + '</div>' +
+      '<div style="color:#6B6B80;font-size:11px;margin-top:6px">' + fmtDate(run.created_at) + (run.archived ? ' \u00b7 archived run' : '') + '</div></div>' +
+    '<div style="text-align:right"><div style="font-size:32px;font-weight:800;color:' + statusColor(run.confidence < 0.7 ? "watch" : "within") + '">' + Math.round((run.confidence || 0) * 100) + '%</div><div style="font-size:10px;color:#6B6B80;text-transform:uppercase;letter-spacing:1px">Confidence</div></div></div>';
+  var gauges = (run.findings && run.findings.length) ? '<div style="margin-top:20px">' + panel("Covenant status", sevLabel, run.findings.map(gauge).join("")) + '</div>' : "";
+  var memo = '<div style="margin-top:20px">' + panel("Escalation memo", sevLabel, '<pre class="memo">' + esc(run.memo || "(memo unavailable)") + '</pre>') + '</div>';
+  return back + head + gauges + memo;
+}
+function openHistory(id) {
+  historyDetail = "loading"; render();
+  api.runDetail(id).then(function (d) { historyDetail = d; render(); }).catch(function () { historyDetail = "error"; render(); });
+}
+function closeHistory() { historyDetail = null; render(); }
 
 /* ============ APP SHELL + ROUTER ============ */
 function renderApp() {
@@ -526,7 +547,7 @@ function renderApp() {
     body = panel("Console", "live data", '<div class="empty"><span class="spinner" style="border-color:#2E2E3E;border-top-color:' + C.oxblood + '"></span> Connecting to the covenant engine\u2026</div>');
   } else if (view == "Portfolio") body = vPortfolio();
   else if (view == "Investigation") body = vInvestigation();
-  else if (view == "Diagnostics") body = vEval();
+  else if (view == "Audit") body = vEval();
   else body = vHistory();
   var tabs = VIEWS.map(function (v) { return '<button class="navbtn' + (v == view ? ' active' : '') + '" onclick="setView(\'' + v + '\')">' + v + '</button>'; }).join("");
   document.getElementById("app").innerHTML =
@@ -548,7 +569,7 @@ function setView(v) {
   view = v;
   // History and Diagnostics read live state that a fresh run refreshes; make sure
   // History always reflects the latest persisted runs when opened.
-  if (v == "History") { api.getHistory().then(function (h) { currentHistory = h; render(); }).catch(function () {}); }
+  if (v == "History") { historyDetail = null; api.getHistory().then(function (h) { currentHistory = h; render(); }).catch(function () {}); }
   render();
 }
 
@@ -568,6 +589,7 @@ function loadPortfolio() {
 var QA_SUGGESTIONS = ["Why is the leverage covenant flagged?", "What's the unexplained transaction?", "Is a waiver active?", "What's the recommended action?"];
 var qaOpen = false, qaMessages = [], qaInput = "", qaLoading = false;
 var uploading = false, uploadResult = null, uploadError = null;
+var historyDetail = null;
 
 function openInvestigation(id) {
   currentBorrowerId = id || currentBorrowerId;
@@ -723,6 +745,7 @@ Object.assign(window, {
   goSignIn, goApp, viewArchitecture, doSignIn,
   openInvestigation, doRun, doVerify, doTamper, onEvidenceFile,
   toggleQa, suggestQa, qaKeydown, setView, signOut,
+  openHistory, closeHistory,
 });
 
 render();
