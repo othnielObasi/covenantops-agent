@@ -23,3 +23,7 @@ frontend/build/
 .DS_Store
 .vscode/
 .idea/
+
+# Python virtualenv
+backend/.venv/
+.venv/
