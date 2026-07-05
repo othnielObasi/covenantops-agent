@@ -45,3 +45,19 @@ runs `npm install` in `frontend/`. You normally only need to start the services.
 - Signing key is per-instance unless `COVENANTOPS_SIGNING_KEY_B64` is set, so
   receipts do not verify across backend restarts. Verify within the same run of the
   server.
+
+### Deployment (Docker Compose → Vultr)
+- `docker compose up --build` runs the deployable stack: `web` (Vite preview,
+  proxies `/api` → `api`), `api` (FastAPI), `db` (Postgres 16, named volume). This
+  is the exact Vultr Compute deployment; see `docs/DEPLOY_VULTR.md`.
+- Docker is **not** installed by the update script. To test compose in a Cloud VM,
+  install Docker first (docker-in-docker: `fuse-overlayfs` storage driver +
+  `iptables-legacy`; for Docker 29 also set `features.containerd-snapshotter:false`
+  in `/etc/docker/daemon.json`).
+- The `web` container serves via `vite preview` (not a bare static server) **so
+  that `/api` is proxied**; a plain static `serve` would 404 on `/api`.
+- Postgres persistence needs `psycopg2-binary` (in `backend/requirements.txt`);
+  without it TraceMemory silently falls back to in-memory and `/api/runs` reports
+  `persistent:false`.
+- The compose stack binds host ports 3000/8000; stop the local dev servers first
+  to avoid port conflicts.

@@ -90,6 +90,13 @@ docker compose up --build
 | API       | http://localhost:8000        |
 | API docs  | http://localhost:8000/docs   |
 
+The `web` container serves the built UI via the Vite preview server, which proxies
+`/api` to the `api` service — so the browser stays same-origin and no backend host
+is baked into the build. Runs persist to the `db` (PostgreSQL) service.
+
+To deploy on **Vultr Cloud Compute** with **Vultr Serverless Inference**, see
+[`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md).
+
 ### Without Docker
 
 Backend:

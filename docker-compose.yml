@@ -7,17 +7,19 @@ services:
     environment:
       - DATABASE_URL=postgresql://covenantops:covenantops@db:5432/covenantops
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
       - ./backend/data:/app/data
-
 
   web:
     build: ./frontend
     ports:
       - "3000:3000"
+    # The Vite preview server proxies /api to this target inside the compose network,
+    # keeping the browser same-origin with the frontend.
     environment:
-      - VITE_API_BASE=http://localhost:8000
+      - VITE_API_TARGET=http://api:8000
     depends_on:
       - api
 
@@ -31,6 +33,11 @@ services:
       - "5432:5432"
     volumes:
       - covenantops_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U covenantops -d covenantops"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   covenantops_pgdata:
