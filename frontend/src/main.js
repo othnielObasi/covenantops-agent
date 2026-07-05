@@ -286,8 +286,14 @@ function runActivity() {
 
 function vInvestigation() {
   var run = currentRun;
-  if (!run) return panel("Investigation", "idle", '<div class="empty">Select a borrower from the Portfolio to begin.</div>');
-  var borrowerHead = '<div class="card" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">' +
+  var crumb = '<div style="margin-bottom:14px"><button class="navbtn" style="padding:6px 12px;border:1px solid #2E2E3E" onclick="setView(\'Portfolio\')">\u2190 Portfolio</button></div>';
+  // Not pinned to any borrower: an investigation is opened from the portfolio.
+  if (!run) {
+    return crumb + panel("Investigation", "no borrower selected",
+      '<div class="empty">Select a borrower from the Portfolio to open its investigation.<br/><br/>' +
+      '<button class="ghostbtn" style="max-width:220px;margin:12px auto 0" onclick="setView(\'Portfolio\')">Go to Portfolio</button></div>');
+  }
+  var borrowerHead = crumb + '<div class="card" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">' +
     '<div><div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;flex-wrap:wrap">' +
       '<span style="font-size:18px;font-weight:700;color:#E0E0E8">' + esc(run.borrower) + '</span>' +
       (ran ? pill(run.severity, run.severity == "breach" ? "oxblood" : run.severity == "watch" ? "amber" : "signal") : pill("not yet run", "mute")) +
@@ -301,11 +307,13 @@ function vInvestigation() {
       : '<button class="runbtn" onclick="doRun()">Run covenant check</button>';
     // The workflow streams INSIDE this run panel (runActivity), not in a side list.
     var runBody = '<p class="lead">CovenantOps Agent plans a covenant check, grounds it in the borrower\'s real documents, re-verifies each ratio, cross-checks transactions for a cause, and produces a memo you can verify.</p>' + runBtn + runActivity();
-    return borrowerHead + panel("Run investigation", running ? "agent working\u2026" : "the agent", runBody) +
-      '<div style="margin-top:20px">' + uploadPanel() + '</div>';
+    // Evidence (the input) is shown ABOVE the run, then the run action.
+    return borrowerHead +
+      '<div style="margin-top:20px">' + evidencePanel() + '</div>' +
+      '<div style="margin-top:20px">' + panel("Run investigation", running ? "agent working\u2026" : "the agent", runBody) + '</div>';
   }
 
-  // --- fact row: facility / workflow / evidence summary, at a glance ---
+  // --- fact row: facility / workflow / grounding (the AI backends actually used) ---
   var period = (run.findings && run.findings[0] && run.findings[0].ratio.period) || "\u2014";
   var facilityCard = panel("Facility", "details",
     '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1E1E2E"><span style="color:#6B6B80;font-size:11px">Period</span><span style="font-weight:600;font-size:12px">' + esc(period) + '</span></div>' +
@@ -314,22 +322,8 @@ function vInvestigation() {
   );
   var stepsDone = STEPS.map(function (s) { return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;color:#B8B8C8"><span style="color:' + C.signal + '">\u2713</span>' + s + '</div>'; }).join("");
   var workflowCard = panel("Workflow", "completed", stepsDone);
-  var evCounts = {}; currentEvidence.forEach(function (d) { evCounts[d.trust_level] = (evCounts[d.trust_level] || 0) + 1; });
-  var flagged = currentEvidence.filter(function (d) { return d.injection_findings.length; }).length;
-  var evSummary = '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1E1E2E"><span style="color:#6B6B80;font-size:11px">Documents</span><span style="font-weight:600;font-size:12px">' + currentEvidence.length + '</span></div>' +
-    '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1E1E2E"><span style="color:#6B6B80;font-size:11px">Very high / high trust</span><span style="font-weight:600;font-size:12px">' + ((evCounts.very_high || 0) + (evCounts.high || 0)) + '</span></div>' +
-    '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:#6B6B80;font-size:11px">Integrity flags</span><span style="font-weight:600;font-size:12px;color:' + (flagged ? C.oxblood : C.signal) + '">' + flagged + '</span></div>';
-  var evidenceCard = panel("Evidence", "summary", evSummary);
-  var factRow = '<div class="grid3">' + facilityCard + workflowCard + evidenceCard + '</div>' + '<div style="margin-top:20px">' + panel("Covenant status", run.severity, run.findings.map(gauge).join("")) + '</div>';
-
-  // --- evidence table (full detail) ---
-  var tt = function (t) { return (t == "very_high" || t == "high") ? "signal" : t == "medium" ? "amber" : "oxblood"; };
-  var rows = currentEvidence.map(function (d) {
-    var integ = d.injection_findings.length ? pill("injection flagged", "oxblood") : '<span style="color:' + C.signal + ';font-size:12px">\u2713 clean</span>';
-    return '<tr><td style="color:#E0E0E8">' + esc(d.filename) + '</td><td style="font-size:12px;color:' + C.mute + '">' + esc(d.source_type) + '</td><td>' + pill(d.trust_level, tt(d.trust_level)) + '</td><td>' + integ + '</td></tr>';
-  }).join("");
-  var tbl = '<div class="tblwrap"><table><thead><tr><th>Document</th><th>Type</th><th>Trust</th><th>Integrity</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
-  var evidenceSection = panel("Evidence set", "multi-format \u00b7 trust-weighted", '<p class="lead">CovenantOps grounds on the real documents a credit team uses, each weighted by how trustworthy its source is. Injection in a low-trust document is flagged.</p>' + tbl);
+  var groundingCard = panel("Grounding", "AI backends", groundingRows(run));
+  var factRow = '<div class="grid3">' + facilityCard + workflowCard + groundingCard + '</div>' + '<div style="margin-top:20px">' + panel("Covenant status", run.severity, run.findings.map(gauge).join("")) + '</div>';
 
   // --- memo + verify/export ---
   var memoLeft = panel("Escalation memo", run.severity, '<pre class="memo">' + esc(run.memo) + '</pre>');
@@ -338,9 +332,28 @@ function vInvestigation() {
     panel("Committee record", "export", '<p class="lead">Attach this memo and its signed receipt to committee papers.</p><button class="ghostbtn" style="margin-bottom:0" onclick="window.print()">Export memo (PDF)</button>') + '</div>';
   var memoSection = '<div class="grid2 b">' + memoLeft + memoRight + '</div>';
 
-  return borrowerHead + factRow + '<div style="margin-top:20px">' + uploadPanel() + '</div><div style="margin-top:20px">' + evidenceSection + '</div><div style="margin-top:20px">' + memoSection + '</div><div style="margin-top:20px">' + qaPanel() + '</div>';
+  // Results first, then the evidence they were grounded in, then Q&A.
+  return borrowerHead + factRow +
+    '<div style="margin-top:20px">' + memoSection + '</div>' +
+    '<div style="margin-top:20px">' + evidencePanel() + '</div>' +
+    '<div style="margin-top:20px">' + qaPanel() + '</div>';
 }
-function uploadPanel() {
+
+function groundingRows(run) {
+  var row = function (label, value, color) {
+    return '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1E1E2E"><span style="color:#6B6B80;font-size:11px">' + label + '</span><span style="font-weight:600;font-size:12px;color:' + (color || "#E0E0E8") + '">' + esc(value) + '</span></div>';
+  };
+  var retr = run.retrieval_path === "vultr" ? "VultronRetriever (Vultr)" : "local keyword";
+  var reason = run.inference_path === "vultr" ? "Vultr Serverless Inference" : "local fallback";
+  var guard = run.guard_path === "airg" ? "AIRG governance" : (run.guard_path || "local guard");
+  return row("Retrieval", retr, run.retrieval_path === "vultr" ? C.signal : C.mute) +
+    row("Reasoning", reason, run.inference_path === "vultr" ? C.signal : C.mute) +
+    '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:#6B6B80;font-size:11px">Governance</span><span style="font-weight:600;font-size:12px">' + esc(guard) + '</span></div>';
+}
+
+// Unified evidence panel: the documents grounding the investigation (the INPUT),
+// with the bring-your-own-documents upload control and the full trust-tagged table.
+function evidencePanel() {
   var tt = function (t) { return (t == "very_high" || t == "high") ? "signal" : t == "medium" ? "amber" : "oxblood"; };
   var status = "";
   if (uploading) {
@@ -352,15 +365,16 @@ function uploadPanel() {
   } else if (uploadError) {
     status = '<div class="warn" style="color:' + C.oxblood + '">\u26A0 ' + esc(uploadError) + '</div>';
   }
-  var docs = (currentEvidence || []).map(function (d) {
-    return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:12px;color:#B8B8C8"><span>' + esc(d.filename) + '</span><span style="color:' + C.mute + '">' + esc(d.source_type) + '</span></div>';
-  }).join("") || '<div class="empty" style="padding:12px 0">No documents yet.</div>';
-  return panel("Add evidence", "bring your own documents",
-    '<p class="lead">Upload a credit agreement, waiver, management accounts, transaction export, or a scanned note. Each document is ingested, trust-tagged, and injection-scanned, then grounds the next covenant check.</p>' +
-    '<label class="ghostbtn" style="display:block;text-align:center;margin-bottom:12px' + (uploading ? ';opacity:.6;pointer-events:none' : '') + '">Choose a document to upload' +
-    '<input type="file" id="evidenceFile" style="display:none" onchange="onEvidenceFile(event)" accept=".pdf,.docx,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.txt"/></label>' +
-    status +
-    '<div style="margin-top:12px;border-top:1px solid #1E1E2E;padding-top:10px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#6B6B80;margin-bottom:6px">Evidence set (' + (currentEvidence || []).length + ')</div>' + docs + '</div>');
+  var rows = (currentEvidence || []).map(function (d) {
+    var integ = d.injection_findings.length ? pill("injection flagged", "oxblood") : '<span style="color:' + C.signal + ';font-size:12px">\u2713 clean</span>';
+    return '<tr><td style="color:#E0E0E8">' + esc(d.filename) + '</td><td style="font-size:12px;color:' + C.mute + '">' + esc(d.source_type) + '</td><td>' + pill(d.trust_level, tt(d.trust_level)) + '</td><td>' + integ + '</td></tr>';
+  }).join("") || '<tr><td colspan="4" style="color:' + C.mute + '">No documents yet \u2014 upload the borrower\'s documents to ground the investigation.</td></tr>';
+  var tbl = '<div class="tblwrap"><table><thead><tr><th>Document</th><th>Type</th><th>Trust</th><th>Integrity</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  var uploadCtl = '<label class="ghostbtn" style="display:block;text-align:center;margin-bottom:12px' + (uploading ? ';opacity:.6;pointer-events:none' : '') + '">+ Upload a document (agreement, waiver, accounts, transactions, scan)' +
+    '<input type="file" id="evidenceFile" style="display:none" onchange="onEvidenceFile(event)" accept=".pdf,.docx,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.txt"/></label>';
+  return panel("Evidence", "documents grounding this investigation",
+    '<p class="lead">The documents the agent grounds on \u2014 each ingested, trust-weighted, and injection-scanned. Add the borrower\'s own documents and they join the next covenant check.</p>' +
+    uploadCtl + status + '<div style="margin-top:12px">' + tbl + '</div>');
 }
 
 function qaPanel() {
@@ -542,10 +556,8 @@ function loadPortfolio() {
   portfolioLoading = true; portfolioError = null;
   api.getPortfolio().then(function (rows) {
     portfolio = rows;
-    if (rows[0]) {
-      currentBorrowerId = rows[0].id;
-      if (!currentRun) currentRun = { borrower: rows[0].name, facility: rows[0].facility };
-    }
+    // Do NOT auto-select a borrower: the Investigation is opened from the portfolio,
+    // so the app doesn't look pinned to one borrower.
     portfolioLoaded = true; portfolioLoading = false; render();
   }).catch(function (e) {
     portfolioError = String((e && e.message) || e);
