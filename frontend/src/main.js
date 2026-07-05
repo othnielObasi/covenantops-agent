@@ -463,8 +463,17 @@ function renderApp() {
   document.getElementById("app").innerHTML =
     '<div class="topbar"><div class="lbrand"><div class="logomark" style="width:32px;height:32px;font-size:15px">C</div>' +
     '<div><div class="brand">CovenantOps Agent</div><div class="brandsub">covenantops \u00b7 verifiable covenant monitoring</div></div></div>' +
-    '<div style="display:flex;align-items:center;gap:12px"><div class="navtabs">' + tabs + '</div><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:' + C.mute + '"><span style="width:6px;height:6px;border-radius:50%;background:' + C.signal + ';box-shadow:0 0 6px ' + C.signal + '"></span>system operational</span></div></div>' +
+    '<div style="display:flex;align-items:center;gap:12px"><div class="navtabs">' + tabs + '</div><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:' + C.mute + '"><span style="width:6px;height:6px;border-radius:50%;background:' + C.signal + ';box-shadow:0 0 6px ' + C.signal + '"></span>system operational</span><button class="navbtn" style="border:1px solid #2E2E3E;color:#FF4444;margin-left:4px" onclick="signOut()">Sign out</button></div></div>' +
     '<main><div class="wrap">' + body + '</div></main>';
+}
+function signOut() {
+  screen = "landing";
+  view = "Portfolio";
+  ran = false; step = -1; verify = "idle";
+  qaOpen = false; qaMessages = []; qaInput = "";
+  uploadResult = null; uploadError = null;
+  currentRun = null; currentEvidence = []; currentHistory = [];
+  render();
 }
 function setView(v) {
   view = v;
@@ -587,7 +596,7 @@ function render() {
 Object.assign(window, {
   goSignIn, goApp, viewArchitecture, doSignIn,
   openInvestigation, doRun, doVerify, doTamper, onEvidenceFile,
-  toggleQa, suggestQa, qaKeydown, setView,
+  toggleQa, suggestQa, qaKeydown, setView, signOut,
 });
 
 render();
