@@ -73,6 +73,17 @@ var api = {
   getEvidence: function () {
     return jget("/evidence").then(function (d) { return d.documents || []; });
   },
+  // Bring-your-own-documents entry point: multipart upload -> the backend
+  // sanitizes, ingests, trust-tags, and injection-scans the file, adding it to
+  // the evidence pack the next covenant run grounds on.
+  uploadEvidence: function (file) {
+    var fd = new FormData();
+    fd.append("file", file);
+    return fetch(API + "/evidence/upload", { method: "POST", body: fd }).then(function (r) {
+      if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || ("upload " + r.status)); });
+      return r.json();
+    });
+  },
   getHistory: function () {
     return jget("/runs").then(function (d) { return d.runs || []; });
   },
@@ -241,7 +252,8 @@ function vInvestigation() {
     var flow = '<ol class="flow">' + STEPS.map(function (s, i) { var done = step > i; return '<li><span class="num' + (done ? ' done' : '') + '">' + (done ? '\u2713' : (i + 1)) + '</span><span style="font-size:13px;color:' + (done ? '#E0E0E8' : C.mute) + '">' + s + '</span></li>'; }).join("") + '</ol>';
     return borrowerHead + '<div class="grid2 a">' +
       panel("Run investigation", "the agent", '<p class="lead">CovenantOps Agent plans a covenant check, grounds it in the borrower\'s real documents, re-verifies each ratio, and explains any drift toward breach.</p><button class="runbtn" onclick="doRun()">Run covenant check</button>') +
-      '<div class="stack">' + panel("Why this is not basic RAG", "agent proof", '<div class="proof">' + proof + '</div>') + panel("Workflow", "multi-step", flow) + '</div></div>';
+      '<div class="stack">' + panel("Why this is not basic RAG", "agent proof", '<div class="proof">' + proof + '</div>') + panel("Workflow", "multi-step", flow) + '</div></div>' +
+      '<div style="margin-top:20px">' + uploadPanel() + '</div>';
   }
 
   // --- fact row: facility / workflow / evidence summary, at a glance ---
@@ -277,8 +289,31 @@ function vInvestigation() {
     panel("Committee record", "export", '<p class="lead">Attach this memo and its signed receipt to committee papers.</p><button class="ghostbtn" style="margin-bottom:0" onclick="window.print()">Export memo (PDF)</button>') + '</div>';
   var memoSection = '<div class="grid2 b">' + memoLeft + memoRight + '</div>';
 
-  return borrowerHead + factRow + '<div style="margin-top:20px">' + evidenceSection + '</div><div style="margin-top:20px">' + memoSection + '</div><div style="margin-top:20px">' + qaPanel() + '</div>';
+  return borrowerHead + factRow + '<div style="margin-top:20px">' + uploadPanel() + '</div><div style="margin-top:20px">' + evidenceSection + '</div><div style="margin-top:20px">' + memoSection + '</div><div style="margin-top:20px">' + qaPanel() + '</div>';
 }
+function uploadPanel() {
+  var tt = function (t) { return (t == "very_high" || t == "high") ? "signal" : t == "medium" ? "amber" : "oxblood"; };
+  var status = "";
+  if (uploading) {
+    status = '<div class="chk" style="display:flex;align-items:center;gap:8px;color:#8B8BA0"><span class="spinner" style="border-color:#2E2E3E;border-top-color:' + C.oxblood + ';width:12px;height:12px"></span> Ingesting, trust-tagging &amp; injection-scanning\u2026</div>';
+  } else if (uploadResult) {
+    var f = uploadResult;
+    var integ = (f.injection_findings && f.injection_findings.length) ? pill("injection flagged", "oxblood") : '<span style="color:' + C.signal + '">\u2713 clean</span>';
+    status = '<div class="chk">\u2713 Ingested <strong style="color:#E0E0E8">' + esc(f.filename) + '</strong> &nbsp; ' + pill(f.trust_level, tt(f.trust_level)) + ' &nbsp; ' + integ + '</div>';
+  } else if (uploadError) {
+    status = '<div class="warn" style="color:' + C.oxblood + '">\u26A0 ' + esc(uploadError) + '</div>';
+  }
+  var docs = (currentEvidence || []).map(function (d) {
+    return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:12px;color:#B8B8C8"><span>' + esc(d.filename) + '</span><span style="color:' + C.mute + '">' + esc(d.source_type) + '</span></div>';
+  }).join("") || '<div class="empty" style="padding:12px 0">No documents yet.</div>';
+  return panel("Add evidence", "bring your own documents",
+    '<p class="lead">Upload a credit agreement, waiver, management accounts, transaction export, or a scanned note. Each document is ingested, trust-tagged, and injection-scanned, then grounds the next covenant check.</p>' +
+    '<label class="ghostbtn" style="display:block;text-align:center;margin-bottom:12px' + (uploading ? ';opacity:.6;pointer-events:none' : '') + '">Choose a document to upload' +
+    '<input type="file" id="evidenceFile" style="display:none" onchange="onEvidenceFile(event)" accept=".pdf,.docx,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.txt"/></label>' +
+    status +
+    '<div style="margin-top:12px;border-top:1px solid #1E1E2E;padding-top:10px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#6B6B80;margin-bottom:6px">Evidence set (' + (currentEvidence || []).length + ')</div>' + docs + '</div>');
+}
+
 function qaPanel() {
   var chips = qaMessages.length ? "" : QA_SUGGESTIONS.map(function (q, i) { return '<button class="qachip" onclick="suggestQa(' + i + ')">' + q + '</button>'; }).join("");
   var msgs = qaMessages.map(function (m) {
@@ -456,12 +491,28 @@ function loadPortfolio() {
 
 var QA_SUGGESTIONS = ["Why is the leverage covenant flagged?", "What's the unexplained transaction?", "Is a waiver active?", "What's the recommended action?"];
 var qaOpen = false, qaMessages = [], qaInput = "", qaLoading = false;
+var uploading = false, uploadResult = null, uploadError = null;
 
 function openInvestigation(id) {
   currentBorrowerId = id || currentBorrowerId;
   currentRun = seedRuns[currentBorrowerId] || currentRun;
   ran = false; step = -1; verify = "idle"; qaOpen = false; qaMessages = [];
+  uploadResult = null; uploadError = null;
   view = "Investigation"; render();
+  // load the current evidence set so the user can see (and add to) it before running
+  api.getEvidence().then(function (ev) { currentEvidence = ev; render(); }).catch(function () {});
+}
+function onEvidenceFile(e) {
+  var file = e.target && e.target.files && e.target.files[0];
+  if (!file) return;
+  uploading = true; uploadResult = null; uploadError = null; render();
+  api.uploadEvidence(file).then(function (res) {
+    uploading = false; uploadResult = res;
+    render();
+    api.getEvidence().then(function (ev) { currentEvidence = ev; render(); }).catch(function () {});
+  }).catch(function (err) {
+    uploading = false; uploadError = String((err && err.message) || err); render();
+  });
 }
 function doRun() {
   ran = false; step = 0; verify = "idle"; render();
@@ -535,7 +586,7 @@ function render() {
 // expose the interaction surface on window.
 Object.assign(window, {
   goSignIn, goApp, viewArchitecture, doSignIn,
-  openInvestigation, doRun, doVerify, doTamper,
+  openInvestigation, doRun, doVerify, doTamper, onEvidenceFile,
   toggleQa, suggestQa, qaKeydown, setView,
 });
 
