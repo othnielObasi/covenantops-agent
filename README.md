@@ -8,6 +8,21 @@ Built for the RAISE Hackathon 2026 (Vultr Track, Statement Two): a web-based ent
 
 ---
 
+## Live deployment (Vultr Cloud Compute)
+
+The full stack is deployed on Vultr Cloud Compute via Docker Compose, with LLM
+reasoning running on **Vultr Serverless Inference**:
+
+| Surface | URL |
+| --- | --- |
+| **Frontend (console)** | **http://66.135.27.117:3000** |
+| API | http://66.135.27.117:8000 |
+| API docs | http://66.135.27.117:8000/docs |
+
+See [`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md) for the deployment guide.
+
+---
+
 ## Table of contents
 
 - [Highlights](#highlights)
