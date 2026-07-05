@@ -1,96 +1,249 @@
 # CovenantOps Agent
 
-**A verifiable, document-grounded enterprise agent for loan-covenant monitoring.**
+**A verifiable, document-grounded enterprise AI agent for loan-covenant monitoring.**
 
-CovenantOps Agent ingests the real document set a credit team works from — a signed credit agreement, waiver letters, management accounts, transaction exports, and even scanned notes — determines whether a borrower is drifting toward breaching its financial covenants, explains *why*, and produces an escalation memo backed by a cryptographically signed receipt that anyone can verify offline.
+CovenantOps Agent monitors a **portfolio of borrowers**. For each one it ingests the
+real document set a credit team works from — a signed credit agreement, waiver
+letters, management accounts, transaction exports, even scanned notes — runs a
+genuine multi-step investigation to decide whether the borrower is drifting toward
+breaching its financial covenants, explains *why* with a citation trail, and produces
+an escalation memo backed by a cryptographically **signed receipt anyone can verify
+offline**.
 
-Built for the RAISE Hackathon 2026 (Vultr Track, Statement Two): a web-based enterprise agent that plans, retrieves more than once, calls deterministic tools, makes decisions, and produces an outcome a real credit team could use.
+It is not a single retrieve-then-answer call. The agent **plans, retrieves more than
+once, calls deterministic tools, makes decisions, and produces an outcome a real
+credit team could use** — with every tool call **governed** and every conclusion
+**verifiable**.
+
+Built for the RAISE Hackathon 2026 (Vultr Track, Statement Two).
 
 ---
 
 ## Live deployment (Vultr Cloud Compute)
 
-The full stack is deployed on Vultr Cloud Compute via Docker Compose, with LLM
-reasoning running on **Vultr Serverless Inference**:
+The full stack runs on a Vultr Cloud Compute instance via Docker Compose, with
+document retrieval and LLM reasoning on **Vultr Serverless Inference**:
 
 | Surface | URL |
 | --- | --- |
-| **Frontend (console)** | **http://66.135.27.117** |
+| **Console (frontend)** | **http://66.135.27.117** |
 | API | http://66.135.27.117/api |
 | API docs | http://66.135.27.117/docs |
 
-The frontend is served by nginx, which also reverse-proxies `/api` to the backend,
-so everything is one origin on port 80 (the API and database are not exposed
-publicly). See [`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md) for the deployment guide.
+nginx serves the SPA and reverse-proxies `/api` to the backend, so everything is one
+origin on port 80; the API and database are not exposed publicly. See
+[`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md).
 
 ---
 
 ## Table of contents
 
-- [Highlights](#highlights)
-- [How it works](#how-it-works)
-- [Architecture](#architecture)
+- [What it does](#what-it-does)
+- [Capabilities](#capabilities)
+- [System architecture](#system-architecture)
+- [Agent workflow](#agent-workflow)
+- [Real-time progress (streaming)](#real-time-progress-streaming)
+- [Governance boundary](#governance-boundary)
+- [Verifiable receipts](#verifiable-receipts)
+- [Vultr Serverless Inference](#vultr-serverless-inference)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [API reference](#api-reference)
-- [Verifying a receipt offline](#verifying-a-receipt-offline)
 - [Testing](#testing)
 - [Project layout](#project-layout)
-- [Vultr alignment](#vultr-alignment)
 - [Security notes](#security-notes)
 - [Documentation](#documentation)
 - [License](#license)
 
 ---
 
-## Highlights
+## What it does
 
-- **Multi-format document grounding** — PDF, DOCX, XLSX, CSV, and scanned images (OCR), each tagged with a source-provenance trust level.
-- **Verifiable output** — every memo is backed by an Ed25519-signed receipt, verifiable offline with no server and no trusted third party. Tampering is detectable.
-- **Governed** — every tool call is evaluated at the tool-agent boundary (AIRG when configured, deterministic local guard otherwise). Prompt injection in low-trust documents is caught before it reaches the agent's reasoning.
-- **Context integrity** — freshness, source-authority conflict, and finance-domain checks run before a decision is finalized.
-- **Self-improving, safely** — the agent learns to attribute causes across runs; a poisoning gate prevents a blocked or low-confidence run from teaching, and an ablation demonstrates the improvement is real.
-- **Resilient** — an interrupted run resumes from a checkpoint without duplicate work.
-- **Durable** — runs and trace events persist across restarts (SQLite locally, PostgreSQL in production).
-- **Vultr-native** — LLM and RAG workloads route to Vultr Serverless Inference when configured, with a deterministic local fallback and no GPU dependency.
+A credit team opens the **portfolio**, picks a borrower, and runs an investigation.
+The agent grounds its decision in that borrower's documents, streams its progress
+step-by-step, and returns an auditable escalation memo:
 
-## How it works
+1. **Portfolio** — every monitored borrower with a live severity (breach / watch /
+   within limits) and a cause-attribution confidence.
+2. **Investigation** — open a borrower, review/upload its evidence, and run the
+   covenant check; the workflow streams live inside the run space.
+3. **Decision** — covenant gauges (ratio vs. limit, headroom), an escalation memo
+   with citations, and a signed receipt.
+4. **Diagnostics** — an audit trail (naming the real AI backends used), an evidence
+   graph, context-health checks, and self-evaluation scores.
+5. **Ask the agent** — a governed, Vultr-backed Q&A grounded strictly in the run.
 
-Given a borrower and facility, the agent runs a multi-step workflow rather than a single retrieval-and-answer call:
+The **confidence score reflects how many flagged transactions were matched to a
+clear cause versus left unexplained** — an honest signal, not a model's self-report.
 
-1. **Ingest & plan** — parse the credit agreement and evidence set; tag each document by trust level; scan for injection.
-2. **Retrieve clauses** — pull the governing covenant clauses (leverage, interest cover, liquidity).
-3. **Retrieve financials** — pull filings to establish the trend.
-4. **Recalculate ratios** — deterministically re-verify each ratio from the underlying figures.
-5. **Apply waivers** — adjust the effective threshold for any active signed waiver.
-6. **Cross-check transactions** — attribute a cause to each flagged movement; surface what cannot be explained.
-7. **Check context integrity** — freshness, injection, source-authority conflicts, finance-domain validation.
-8. **Generate the memo** — risk level, ratio vs. threshold, headroom, causes, unexplained items, confidence, and recommendations, with citations to source documents.
-9. **Sign the receipt** — an Ed25519-signed record of the evidence the memo stands on, verifiable offline.
+## Capabilities
 
-The confidence score reflects how many flagged transactions were matched to a clear cause versus left unexplained — an honest signal, not a model's self-report.
+- **Portfolio of borrowers** — five representative borrowers, each with its own
+  agreement terms, filings, and transactions; the *same* agent workflow produces a
+  distinct, real investigation per borrower.
+- **Real document retrieval (RAG)** — covenant clauses are semantically reranked
+  against the investigation query by a **VultronRetriever** model on Vultr Serverless
+  Inference (`/v1/rerank`), with a deterministic local keyword fallback.
+- **Vultr reasoning** — the credit-risk analyst note and the clarifying Q&A run on a
+  Vultr chat model (`/v1/chat/completions`).
+- **Governed at every step** — every tool call is evaluated at the tool↔agent
+  boundary (AIRG when configured, a deterministic local guard otherwise). Prompt
+  injection in low-trust documents — and in Q&A questions — is caught before it
+  reaches the agent's reasoning.
+- **Bring-your-own documents** — upload a credit agreement, waiver, accounts,
+  transactions, or a scanned note; each is ingested, trust-tagged, and
+  injection-scanned, then grounds the next run.
+- **Verifiable output** — every memo is backed by an Ed25519-signed receipt,
+  verifiable offline with no server and no trusted third party. Tampering is
+  detectable.
+- **Real-time workflow** — the agent streams its progress (Server-Sent Events) so the
+  console shows the step it is actually executing.
+- **Context integrity** — freshness, source-authority conflict, and finance-domain
+  checks run before a decision is finalized.
+- **Self-improving, safely** — the agent learns to attribute causes across runs; a
+  poisoning gate stops a blocked or low-confidence run from teaching.
+- **Resilient & durable** — an interrupted run resumes from a checkpoint; runs and
+  trace events persist (SQLite locally, PostgreSQL in production).
+- **Vultr-native, no GPU** — retrieval and reasoning route to Vultr Serverless
+  Inference, with a deterministic local fallback so the demo never breaks.
 
-## Architecture
+## System architecture
 
+Single public origin (port 80). The API and database live only inside the compose
+network; external AI services are optional and fail safe.
+
+```mermaid
+flowchart LR
+    B["Browser — SPA console"]
+
+    subgraph VM["Vultr Cloud Compute · Docker Compose"]
+      W["web — nginx<br/>serves SPA + reverse-proxies /api"]
+      A["api — FastAPI agent<br/>single Uvicorn worker"]
+      DB[("db — PostgreSQL<br/>durable runs and events")]
+    end
+
+    subgraph SI["Vultr Serverless Inference"]
+      RR["VultronRetrieverPrime<br/>/v1/rerank · clause retrieval"]
+      CH["chat model<br/>/v1/chat/completions · reasoning and Q and A"]
+    end
+    AIRG["AIRG governance API<br/>fail-safe local guard if unset"]
+
+    B -->|HTTP :80| W
+    W -->|/api/*| A
+    A --> DB
+    A -.->|retrieve| RR
+    A -.->|reason and answer| CH
+    A -.->|guard every tool call| AIRG
 ```
-Frontend (React/Vite)  --HTTP /api/*-->  FastAPI backend
-                                          |
-                                          |  Agent runner:
-                                          |    plan -> retrieve -> calculate
-                                          |    -> cross-check -> memo
-                                          |
-                                          |  Tools:  ingestion, extractors,
-                                          |          finance calculations
-                                          |  Trust:  receipt (Ed25519),
-                                          |          governance (AIRG + fallback),
-                                          |          context health, recovery,
-                                          |          TraceMemory, Vultr inference
-                                          |
-                                          v
-                              PostgreSQL / SQLite  (durable runs + events)
+
+Dotted edges are optional, fail-safe integrations: if a service is unset or
+unreachable, the agent continues on a deterministic local path and records which path
+it used (`retrieval_path`, `inference_path`, `guard_path`).
+
+## Agent workflow
+
+A genuine multi-step workflow — plan, retrieve more than once, call tools, decide,
+produce an outcome — not one RAG call. Every tool call passes the governance guard.
+
+```mermaid
+flowchart TD
+    P["1 · Plan the covenant investigation"] --> RC["2 · Retrieve covenant clauses<br/>VultronRetriever rerank on Vultr"]
+    RC --> PF["3 · Pull filings and trend"]
+    PF --> CR["4 · Recalculate each ratio (deterministic)"]
+    CR --> AW["5 · Apply active signed waivers"]
+    AW --> XC["6 · Cross-check transactions for a cause"]
+    XC --> CI["7 · Context-integrity checks<br/>freshness · injection · authority · domain"]
+    CI --> MM["8 · Generate escalation memo<br/>+ Vultr analyst note + confidence"]
+    MM --> SR["9 · Sign Ed25519 receipt"]
+
+    GU{{"Governance guard — every tool call<br/>AIRG or local · allow / review / block"}}
+    RC -. scanned .- GU
+    PF -. scanned .- GU
+    XC -. scanned .- GU
 ```
 
-External integrations (AIRG governance, Vultr Serverless Inference) are optional and fail safe: if unreachable or unconfigured, the agent continues on a deterministic local path and records which path it used.
+## Real-time progress (streaming)
+
+The console runs the agent over `GET /api/covenant/run/stream` and renders each phase
+as its real progress event arrives — no fake timer. Steps light up on the step the
+agent is actually executing.
+
+```mermaid
+sequenceDiagram
+    participant U as Browser console
+    participant A as FastAPI agent
+    participant V as Vultr Serverless Inference
+    U->>A: GET /api/covenant/run/stream?borrower=…
+    A-->>U: progress · plan
+    A->>V: rerank clauses (VultronRetriever)
+    A-->>U: progress · retrieve_clauses
+    A-->>U: progress · pull_filings
+    A-->>U: progress · calculate
+    A-->>U: progress · apply_waiver
+    A-->>U: progress · cross_check
+    A->>V: analyst note (chat completion)
+    A-->>U: progress · memo
+    A-->>U: result · memo + findings + receipt
+```
+
+## Governance boundary
+
+Retrieved document text, transaction text, and the user's Q&A question are all
+untrusted free text. Each is evaluated before the agent trusts it; the guard fails
+safe to a deterministic local layer if AIRG is unreachable.
+
+```mermaid
+flowchart LR
+    T["Tool output / document text / Q and A question"] --> GU{"Governance guard"}
+    GU -->|AIRG configured| AIRG["AIRG evaluate + scan-output"]
+    GU -->|unset or unreachable| LOC["Local guard<br/>injection + PII rules"]
+    AIRG --> DEC{"Decision"}
+    LOC --> DEC
+    DEC -->|allow| OK["proceed"]
+    DEC -->|review| FLAG["flag for human review"]
+    DEC -->|block| BLK["withhold from reasoning"]
+```
+
+## Verifiable receipts
+
+Every completed run signs a receipt over the canonical evidence body. Anyone can
+verify it offline with only the standalone verifier and the embedded public key.
+
+```mermaid
+flowchart LR
+    RUN["Completed run"] --> BODY["Canonical receipt body<br/>sorted-key, whitespace-free JSON"]
+    BODY --> HASH["SHA-256 content hash"]
+    HASH --> SIGN["Ed25519 signature"]
+    SIGN --> REC["Signed receipt + public key"]
+    REC --> VER{"Offline verify:<br/>recompute hash + check signature"}
+    VER -->|intact| OKV["✓ VALID"]
+    VER -->|memo or evidence altered| BADV["✗ INVALID"]
+```
+
+```bash
+python3 backend/tools/verify_receipt.py sample-receipts/valid-receipt.json
+#   content hash MATCH, Ed25519 signature VALID  -> exit 0
+python3 backend/tools/verify_receipt.py sample-receipts/tampered-receipt.json
+#   content hash MISMATCH, signature INVALID     -> exit 1
+```
+
+## Vultr Serverless Inference
+
+The Vultr track requires LLM workloads to run on Vultr Serverless Inference (no GPUs
+at the event). CovenantOps Agent uses it for both halves of RAG:
+
+| Workload | Endpoint | Model (default) |
+| --- | --- | --- |
+| **Retrieval** (rank covenant clauses) | `POST /v1/rerank` | `vultr/VultronRetrieverPrime-Qwen3.5-8B` |
+| **Reasoning** (analyst note, Q&A) | `POST /v1/chat/completions` | `deepseek-ai/DeepSeek-V4-Flash` |
+
+- Base URL `https://api.vultrinference.com/v1`, auth `Authorization: Bearer <key>`.
+- Use a **non-reasoning** chat model so completions return `content` directly (a
+  reasoning model can return an empty `content` under a small token budget).
+- If Vultr is not configured or unreachable, retrieval falls back to a local keyword
+  scorer and reasoning to deterministic local logic. Each run records `retrieval_path`
+  and `inference_path` (`vultr` | `local`), surfaced in the Diagnostics **Grounding**
+  card and `GET /api/integrations/vultr/status`.
 
 ## Quick start
 
@@ -101,107 +254,91 @@ cp .env.example .env
 docker compose up --build
 ```
 
-| Service   | URL                          |
-| --------- | ---------------------------- |
-| Frontend  | http://localhost              |
-| API       | http://localhost/api         |
-| API docs  | http://localhost/docs        |
+| Service | URL |
+| --- | --- |
+| Console | http://localhost |
+| API | http://localhost/api |
+| API docs | http://localhost/docs |
 
 The `web` container is **nginx**: it serves the built SPA and reverse-proxies `/api`
-to the `api` service, so the browser stays same-origin on port 80 and no backend
-host is baked into the build. The API and database are only reachable inside the
-compose network (not published to the host). Runs persist to the `db` (PostgreSQL)
-service. For local development use `npm run dev` (Vite dev server on :3000, which
-proxies `/api` to :8000).
+to the `api` service (same origin, no CORS, no backend host baked into the build). The
+API (8000) and database (5432) are internal to the compose network. Runs persist to
+the `db` (PostgreSQL) service.
 
-To deploy on **Vultr Cloud Compute** with **Vultr Serverless Inference**, see
-[`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md).
+To deploy on **Vultr Cloud Compute**, see [`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md).
 
-### Without Docker
-
-Backend:
+### Local development
 
 ```bash
+# backend
 cd backend
-pip install -r requirements.txt
-# OCR for scanned documents requires the tesseract binary:
-#   Debian/Ubuntu: apt-get install -y tesseract-ocr
-#   macOS:         brew install tesseract
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt          # OCR needs the tesseract binary (optional)
 uvicorn app.main:app --reload --port 8000
-```
 
-Frontend (in a second terminal):
-
-```bash
+# frontend (second terminal)
 cd frontend
 npm install
 npm run dev          # http://localhost:3000, proxies /api to :8000
 ```
 
-> The Vite dev **and** preview servers proxy `/api` to `VITE_API_TARGET` (default `http://localhost:8000`). In production, serve the frontend and API behind the same origin, or set `VITE_API_TARGET` at build time.
-
 ## Configuration
 
-All configuration is via environment variables (see `.env.example`). Everything external is optional — the app runs fully with none of them set.
+All configuration is via environment variables (see `.env.example`). Everything
+external is optional — the app runs fully, on deterministic local paths, with none set.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `FRONTEND_ORIGIN` | `http://localhost:3000,http://localhost:5173` | Allowed CORS origins. |
-| `COVENANTOPS_AGREEMENT_PDF` | `data/credit_agreement.pdf` | Credit agreement the agent grounds on. |
-| `COVENANTOPS_EVIDENCE_DIR` | `data/evidence` | Directory of the multi-format evidence pack. |
+| `COVENANTOPS_AGREEMENT_PDF` | `data/credit_agreement.pdf` | Lead borrower's credit agreement. |
+| `COVENANTOPS_EVIDENCE_DIR` | `data/evidence` | Multi-format evidence pack. |
 | `COVENANTOPS_UPLOAD_DIR` | `data/evidence` | Destination for uploaded documents. |
-| `COVENANTOPS_SIGNING_KEY_B64` | *(generated)* | Base64 Ed25519 signing key. **Recommended in production** — see [Security notes](#security-notes). |
-| `DATABASE_URL` | `sqlite:///./data/covenantops.db` | TraceMemory persistence; use a PostgreSQL URL in production. |
+| `COVENANTOPS_SIGNING_KEY_B64` | *(generated)* | Base64 Ed25519 signing key. **Set in production** so receipts verify across restarts. |
+| `DATABASE_URL` | `sqlite:///./data/covenantops.db` | TraceMemory persistence; PostgreSQL in production. |
+| `VULTR_INFERENCE_API_KEY` | *(unset)* | Vultr **Serverless Inference** key (not the account API key). If unset, local fallback. |
+| `VULTR_CHAT_MODEL` | `deepseek-ai/DeepSeek-V4-Flash` | Vultr chat model (reasoning + Q&A). |
+| `VULTR_RERANK_MODEL` | `vultr/VultronRetrieverPrime-Qwen3.5-8B` | Vultr rerank model (clause retrieval). |
+| `VULTR_TIMEOUT_SECONDS` | `20` | Vultr request timeout. |
 | `AIRG_URL` | *(unset)* | AIRG governance endpoint. If unset, the local guard is used. |
 | `AIRG_API_KEY` | *(unset)* | AIRG API key (`X-API-Key`). |
-| `AIRG_TIMEOUT_SECONDS` | `4` | AIRG request timeout; a slow API degrades to the local guard. |
-| `VULTR_INFERENCE_API_KEY` | *(unset)* | Vultr Serverless Inference key. If unset, deterministic local reasoning is used. |
-| `VULTR_CHAT_MODEL` | `kimi-k2-instruct` | Vultr chat model. |
-| `VULTR_TIMEOUT_SECONDS` | `20` | Vultr request timeout. |
+| `AIRG_TIMEOUT_SECONDS` | `4` | AIRG timeout; a slow API degrades to the local guard. |
+| `FRONTEND_ORIGIN` | `http://localhost:3000,http://localhost:5173` | Allowed CORS origins (not needed behind the nginx proxy). |
 
 ## API reference
 
-Base URL: `http://localhost:8000`. Interactive docs at `/docs`.
+Behind the nginx proxy the base is `/api` (same origin); directly, the API listens on
+`:8000`. Interactive docs at `/docs`.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/covenant/run` | Run the agent. Query: `learning` (bool), `attack` (bool), `fail_after` (int). |
+| `GET` | `/api/portfolio` | Monitored borrowers with fast severity + confidence. |
+| `POST` | `/api/covenant/run` | Run the agent. Query: `borrower`, `learning`, `attack`, `fail_after`. |
+| `GET` | `/api/covenant/run/stream` | Run the agent and **stream** real per-step progress (SSE). Query: `borrower`. |
+| `POST` | `/api/covenant/qa` | Governed, Vultr-backed Q&A grounded in a run (`trace_id`, `question`). |
 | `POST` | `/api/covenant/resume/{task_id}` | Resume an interrupted run from its checkpoint. |
+| `POST` | `/api/evidence/upload` | Upload + ingest a document (multipart). |
+| `GET` | `/api/evidence` | List the ingested evidence pack (format, trust level, injection findings). |
 | `GET` | `/api/traces/{trace_id}/receipt` | Signed evidence receipt for a run. |
 | `GET` | `/api/traces/{trace_id}/receipt/verify` | Server-side verification of a run's receipt. |
-| `POST` | `/api/receipts/verify` | Verify a posted receipt payload (used by the tamper demo). |
-| `GET` | `/api/traces/{trace_id}/evaluation` | Self-evaluation scores, evidence map, and context health. |
+| `POST` | `/api/receipts/verify` | Verify a posted receipt payload (tamper demo). |
+| `GET` | `/api/traces/{trace_id}/evaluation` | Self-evaluation scores, evidence map, context health. |
 | `GET` | `/api/traces/{trace_id}/replay` | Replay a run's tool calls, guard decisions, and outcome. |
-| `GET` | `/api/trace-events` | Recent persisted TraceMemory events. |
-| `POST` | `/api/evidence/upload` | Upload and ingest a document (multipart). |
-| `GET` | `/api/evidence` | Ingest and list the evidence pack (format, trust level, injection findings). |
 | `GET` | `/api/runs` | List persisted runs. |
 | `GET` | `/api/receipts/public-key` | Ed25519 public key for offline verification. |
-| `GET` | `/api/integrations/vultr/status` | Whether Vultr Serverless Inference is configured. |
+| `GET` | `/api/integrations/vultr/status` | Whether Vultr Serverless Inference is configured + last path used. |
 | `GET` | `/api/health` | Liveness, guard path, and integration status. |
-
-## Verifying a receipt offline
-
-Every completed run produces a receipt that can be verified without the server, using only the standalone verifier and the public key embedded in the receipt:
-
-```bash
-python3 backend/tools/verify_receipt.py sample-receipts/valid-receipt.json
-#   content hash MATCH, Ed25519 signature VALID  -> exit 0
-
-python3 backend/tools/verify_receipt.py sample-receipts/tampered-receipt.json
-#   content hash MISMATCH, signature INVALID     -> exit 1
-```
-
-The verifier recomputes the SHA-256 over the canonical encoding of the receipt body and checks the Ed25519 signature against the embedded public key. Any change to the memo or evidence invalidates the receipt.
 
 ## Testing
 
 ```bash
 cd backend
-python3 -m pytest tests -q      # 14 tests
+python3 -m pytest tests -q      # 26 tests
 ```
 
-The suite covers document ingestion and threshold extraction, the agent workflow and memo, receipt sign/verify and tamper rejection, governance fail-safe, poisoning-gated self-improvement and its ablation, recovery/resume, multi-format ingestion with trust tagging, waiver application, evaluation/evidence-map generation, context-health checks, and persistent TraceMemory.
+The suite covers document ingestion and threshold extraction, the agent workflow and
+memo, receipt sign/verify and tamper rejection, governance fail-safe, poisoning-gated
+self-improvement and its ablation, recovery/resume, multi-format ingestion with trust
+tagging, waiver application, evaluation/evidence-map generation, context-health checks,
+and persistent TraceMemory.
 
 ## Project layout
 
@@ -209,49 +346,53 @@ The suite covers document ingestion and threshold extraction, the agent workflow
 covenantops-agent/
 ├── backend/
 │   ├── app/
-│   │   ├── agent/        # runner (workflow), memo, learning, evaluation
-│   │   ├── tools/        # ingestion, extractors/, finance calculations
-│   │   ├── trust/        # receipt, governance, context_health, recovery,
-│   │   │                 #   trace_memory, vultr_inference
-│   │   ├── api.py        # FastAPI routes
+│   │   ├── agent/        # runner (workflow + progress streaming), memo, learning, evaluation
+│   │   ├── tools/        # ingestion, extractors/, finance calculations, borrowers (portfolio)
+│   │   ├── trust/        # receipt (Ed25519), governance (AIRG + local), context_health,
+│   │   │                 #   recovery, trace_memory, vultr_inference (rerank + chat)
+│   │   ├── api.py        # FastAPI routes (portfolio, run, run/stream, qa, evidence, receipts)
 │   │   ├── main.py       # app entrypoint
 │   │   └── models.py     # schemas
-│   ├── data/             # credit agreement + evidence pack
-│   ├── tests/            # pytest suite
+│   ├── data/             # lead credit agreement + evidence pack
+│   ├── tests/            # pytest suite (26)
 │   ├── tools/            # standalone offline receipt verifier
 │   ├── Dockerfile
 │   └── requirements.txt
-├── frontend/             # React + Vite + Tailwind
-├── docs/                 # BRD, TRD, executive summary, evaluation, demo script
+├── frontend/             # Vanilla-JS SPA (Vite build) served by nginx
+│   ├── index.html        # styles + shell
+│   ├── src/main.js       # UI + live fetch/SSE wiring
+│   ├── nginx.conf        # SPA + /api reverse proxy
+│   └── Dockerfile
+├── docs/                 # BRD, TRD, executive summary, evaluation, demo script, DEPLOY_VULTR
 ├── sample-receipts/      # valid + tampered receipts for the verify demo
 ├── docker-compose.yml
 └── .env.example
 ```
 
-## Vultr alignment
-
-The Vultr track requires that LLM workloads run on Vultr Serverless Inference (GPUs are not available for the event). CovenantOps Agent follows this:
-
-- The application deploys on Vultr Compute via Docker Compose.
-- LLM reasoning and RAG retrieval route to Vultr Serverless Inference (`https://api.vultrinference.com/v1`, OpenAI-compatible) when `VULTR_INFERENCE_API_KEY` is set.
-- If Vultr inference is not configured or is unreachable, the agent uses deterministic local reasoning so the demo remains stable — with no GPU dependency.
-- Each run records the inference path (`vultr` or `local_fallback`), and `/api/integrations/vultr/status` surfaces the configuration for transparency.
-
 ## Security notes
 
-- **Signing key.** For any real deployment, set `COVENANTOPS_SIGNING_KEY_B64` to a stable key. Without it, a key is generated per instance, so receipts will not verify across restarts or multiple replicas. Generate one with:
+- **Signing key.** Set `COVENANTOPS_SIGNING_KEY_B64` in production; without it a key
+  is generated per instance, so receipts won't verify across restarts/replicas.
 
   ```bash
   cd backend
   python3 -c "from app.trust.receipt import ReceiptService; print(ReceiptService.generate_key_b64())"
   ```
 
-- **Governance fails safe.** When AIRG is unreachable, the agent falls back to a deterministic local guard that still blocks injection and PII in tool outputs; the guard path is always recorded.
-- **Uploaded documents** are filename-sanitized, size-checked, and injection-scanned on ingestion.
-- **Representative data.** The included credit agreement and evidence pack are representative and intended for demonstration. Replace them with client-owned documents for production use.
+- **Governance fails safe.** When AIRG is unreachable, the deterministic local guard
+  still blocks injection/PII in tool outputs and in Q&A input; the guard path is
+  recorded.
+- **Two different Vultr keys.** Serverless Inference uses a key from the Serverless
+  Inference product (`api.vultrinference.com`) — not the Vultr account API key
+  (`api.vultr.com`, which is IP-allowlisted).
+- **Uploaded documents** are filename-sanitized, size-checked, and injection-scanned
+  on ingestion.
+- **Representative data.** The bundled agreements/evidence are representative for
+  demonstration; replace with client-owned documents for production use.
 
 ## Documentation
 
+- [`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md) — deploy on Vultr Cloud Compute + Serverless Inference.
 - `docs/CovenantOps-Agent-Executive-Summary.docx` — one-page overview.
 - `docs/CovenantOps-Agent-BRD.docx` — business requirements.
 - `docs/CovenantOps-Agent-TRD.docx` — technical requirements and architecture.
@@ -260,4 +401,5 @@ The Vultr track requires that LLM workloads run on Vultr Serverless Inference (G
 
 ## License
 
-Apache-2.0. The representative evidence pack is provided for demonstration and may be replaced with client-owned production documents.
+Apache-2.0. The representative evidence pack is provided for demonstration and may be
+replaced with client-owned production documents.
