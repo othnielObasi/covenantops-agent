@@ -73,12 +73,17 @@ class CovenantAgent:
         findings: List[Dict[str, Any]] = []
         guard_paths: set = set()
 
-        # 1. plan & retrieve clauses (from the ingested real PDF)
+        # Progress events fire at the START of each phase so the live workflow shows
+        # the step the agent is actually executing (not the one it just finished).
+
+        # 1. plan
         self._progress("plan")
+
+        # 2. retrieve clauses — semantically rank the borrower's covenant clauses with
+        # a VultronRetriever model on Vultr Serverless Inference; fall back to the
+        # local keyword scorer if Vultr is unavailable. Record which path was used.
+        self._progress("retrieve_clauses")
         _query = "financial covenant leverage interest cover liquidity ratio"
-        # Document retrieval: semantically rank the borrower's covenant clauses with a
-        # VultronRetriever model on Vultr Serverless Inference; fall back to the local
-        # keyword scorer if Vultr is unavailable. Record which retrieval path was used.
         retrieval_path = "local"
         clauses = None
         if self.inference is not None:
@@ -96,14 +101,18 @@ class CovenantAgent:
         for c in clauses:
             citations.append({"source": c.get("source_document", "credit_agreement"),
                               "clause_id": c["id"], "title": c["title"], "page": c.get("source_page")})
-        self._progress("retrieve_clauses")
 
-        # 2. filings
+        # 3. pull filings
+        self._progress("pull_filings")
         filings = get_filings(periods=4, borrower_id=bid)
         self._call("get_filings", {"periods": 4}, {"periods": [f["period"] for f in filings]}, tool_calls)
-        self._progress("pull_filings")
 
-        # 3. calculate ratios; 4. cross-check flagged (with checkpoint/resume)
+        # 4. calculate ratios (applies waivers); 6. cross-check flagged covenants.
+        # The apply_waiver / cross_check phases are announced the moment that work
+        # first runs, so each step lights up live (with checkpoint/resume preserved).
+        self._progress("calculate")
+        _waiver_announced = False
+        _xcheck_announced = False
         for cov in COVENANTS_TO_TEST:
             # resume: skip covenants already completed before an interruption
             if self.recovery is not None and self.recovery.already_done(cov):
@@ -113,8 +122,14 @@ class CovenantAgent:
             citations.append({"source": ratio.get("source_document", "credit_agreement"),
                               "clause_id": ratio["covenant_id"], "metric": ratio["metric"],
                               "page": ratio.get("source_page")})
+            if not _waiver_announced:
+                self._progress("apply_waiver")   # effective thresholds (with waivers) resolved
+                _waiver_announced = True
             finding = {"covenant": cov, "ratio": ratio, "cross_check": None}
             if ratio["drifting_toward_breach"] or ratio["breached"]:
+                if not _xcheck_announced:
+                    self._progress("cross_check")
+                    _xcheck_announced = True
                 cc = cross_check_transactions(cov, borrower_id=bid)
                 if self.improver is not None:
                     from app.agent.learning import apply_lessons_to_crosscheck
@@ -127,6 +142,12 @@ class CovenantAgent:
             # checkpoint after each covenant (may raise RunInterrupted for the demo)
             if self.recovery is not None:
                 self.recovery.record(cov, finding)
+        # make sure the waiver / cross-check steps are announced even when no waiver
+        # exists or nothing is flagged, so the timeline always advances through them
+        if not _waiver_announced:
+            self._progress("apply_waiver")
+        if not _xcheck_announced:
+            self._progress("cross_check")
 
         # merge any findings restored from a checkpoint (resume)
         if self.recovery is not None and self.recovery.saved_findings:
@@ -134,12 +155,6 @@ class CovenantAgent:
             for f in findings:
                 merged[f["covenant"]] = f
             findings = [merged[c] for c in COVENANTS_TO_TEST if c in merged]
-
-        # ratios re-verified, effective thresholds (with waivers) resolved, and
-        # transactions cross-checked for the flagged covenants
-        self._progress("calculate")
-        self._progress("apply_waiver")
-        self._progress("cross_check")
 
         # context health is computed here (not just as a post-hoc extra) because its
         # warnings feed the staleness penalty on the confidence score below. A failure
@@ -184,7 +199,9 @@ class CovenantAgent:
                                 expired_waiver_count * _PENALTY_PER_EXPIRED_WAIVER +
                                 stale_lesson_count * _PENALTY_PER_STALE_LESSON)
 
-        # 5. memo
+        # 7. memo (+ Vultr analyst note) — announce before the work so this step
+        # shows as running while the memo and the Vultr inference call complete.
+        self._progress("memo")
         memo, severity, confidence, raw_confidence = build_memo(
             BORROWER, FACILITY, findings, staleness_penalty=staleness_penalty, staleness_notes=staleness_notes)
 
@@ -205,7 +222,6 @@ class CovenantAgent:
             inference_path = getattr(self.inference, "last_used", "none")
             if analyst_note:
                 memo = memo + "\n\nAnalyst note (Vultr inference):\n" + analyst_note.strip()
-        self._progress("memo")
 
         # resolve overall guard path
         gp = GuardPath.none
