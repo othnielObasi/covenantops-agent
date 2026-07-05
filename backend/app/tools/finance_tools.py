@@ -1,6 +1,11 @@
-"""Tools the covenant agent calls. Clauses come from the ingested real PDF;
-filings and transactions from representative data. Each tool is a real function,
-so the agent's workflow is genuine multi-step tool use."""
+"""Tools the covenant agent calls, now portfolio-aware.
+
+The lead borrower ("meridian") is grounded in the ingested credit-agreement PDF;
+additional borrowers come from app.tools.borrowers with representative agreement
+terms, filings, and transactions. Every tool takes an optional `borrower_id` so
+the *same* multi-step workflow runs a genuine, distinct investigation per borrower.
+Each tool is a real function — the agent's workflow is genuine multi-step tool use.
+"""
 from __future__ import annotations
 
 from typing import Dict, List, Optional
@@ -14,6 +19,21 @@ from app.tools.document_ingestion import ingest_credit_agreement
 # the entire app during import.
 _PDF = os.environ.get("COVENANTOPS_AGREEMENT_PDF", "data/credit_agreement.pdf")
 _AGREEMENT = None
+
+DEFAULT_BORROWER = "meridian"
+
+# Meridian's signed Q2 leverage waiver (very_high trust source). Kept here so the
+# lead borrower's behaviour is unchanged.
+_MERIDIAN_WAIVERS = [
+    {
+        "id": "waiver-q2",
+        "covenant_type": "leverage",
+        "adjusted_threshold": 3.75,   # temporarily relaxed from 3.50
+        "valid_periods": ["2025-Q2", "2025-Q3"],
+        "source": "Q2 Waiver Letter.docx",
+        "trust": "very_high",
+    }
+]
 
 
 def _agreement() -> Dict:
@@ -29,16 +49,46 @@ def _agreement() -> Dict:
     return _AGREEMENT
 
 
-def _clauses() -> List[Dict]:
-    return _agreement()["clauses"]
+def _is_default(borrower_id: Optional[str]) -> bool:
+    return borrower_id in (None, "", DEFAULT_BORROWER)
 
 
-def get_borrower() -> str:
-    return _agreement()["borrower"]
+def _dataset(borrower_id: Optional[str] = None) -> Dict:
+    """Resolve the per-borrower dataset (borrower, facility, clauses, filings,
+    transactions, waivers). The default borrower is grounded in the real PDF."""
+    if _is_default(borrower_id):
+        ag = _agreement()
+        return {
+            "borrower": ag["borrower"],
+            "facility": ag["facility"],
+            "clauses": ag["clauses"],
+            "filings": list(FILINGS),
+            "transactions": list(TRANSACTIONS),
+            "waivers": _MERIDIAN_WAIVERS,
+        }
+    from app.tools.borrowers import get_dataset
+    return get_dataset(borrower_id)
 
 
-def get_facility() -> str:
-    return _agreement()["facility"]
+def list_borrowers() -> List[Dict]:
+    """The monitored portfolio: id, borrower name, and facility for each borrower."""
+    from app.tools.borrowers import BORROWERS
+    out = [{"id": DEFAULT_BORROWER, "borrower": get_borrower(), "facility": get_facility()}]
+    for bid, ds in BORROWERS.items():
+        out.append({"id": bid, "borrower": ds["borrower"], "facility": ds["facility"]})
+    return out
+
+
+def get_borrower(borrower_id: Optional[str] = None) -> str:
+    return _dataset(borrower_id)["borrower"]
+
+
+def get_facility(borrower_id: Optional[str] = None) -> str:
+    return _dataset(borrower_id)["facility"]
+
+
+def _clauses(borrower_id: Optional[str] = None) -> List[Dict]:
+    return _dataset(borrower_id)["clauses"]
 
 
 # Backwards-compatible module attributes (resolved lazily via __getattr__ below).
@@ -46,36 +96,26 @@ def __getattr__(name):
     if name == "CLAUSES":
         return _clauses()
     if name == "BORROWER":
-        return _agreement()["borrower"]
+        return get_borrower()
     if name == "FACILITY":
-        return _agreement()["facility"]
+        return get_facility()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def get_active_waivers() -> List[Dict]:
+def get_active_waivers(borrower_id: Optional[str] = None) -> List[Dict]:
     """Signed waivers/amendments that temporarily adjust a covenant threshold.
-    In production these are parsed from the ingested signed_waiver documents; here
-    a representative Q2 leverage waiver stands in (very_high trust source)."""
-    return [
-        {
-            "id": "waiver-q2",
-            "covenant_type": "leverage",
-            "adjusted_threshold": 3.75,   # temporarily relaxed from 3.50
-            "valid_periods": ["2025-Q2", "2025-Q3"],
-            "source": "Q2 Waiver Letter.docx",
-            "trust": "very_high",
-        }
-    ]
+    In production these are parsed from the ingested signed_waiver documents."""
+    return list(_dataset(borrower_id)["waivers"])
 
 
-def _effective_threshold(covenant_type: str, base_threshold: float, period: str) -> Dict:
+def _effective_threshold(covenant_type: str, base_threshold: float, period: str,
+                         borrower_id: Optional[str] = None) -> Dict:
     """Apply any active, in-period waiver to the base covenant threshold.
 
     If a waiver exists for this covenant type but its valid_periods does not cover
     the requested period, that is surfaced explicitly as `waiver_expired` rather
-    than silently reverting to the base threshold with no explanation — a stale
-    waiver that no longer applies is a freshness finding, not a non-event."""
-    candidates = [w for w in get_active_waivers() if w["covenant_type"] == covenant_type]
+    than silently reverting to the base threshold with no explanation."""
+    candidates = [w for w in get_active_waivers(borrower_id) if w["covenant_type"] == covenant_type]
     for w in candidates:
         if period in w["valid_periods"]:
             return {"threshold": w["adjusted_threshold"], "waiver_applied": w["id"],
@@ -93,30 +133,34 @@ def _effective_threshold(covenant_type: str, base_threshold: float, period: str)
             "base_threshold": base_threshold, "waiver_source": None, "waiver_expired": None}
 
 
-def retrieve_covenant_clauses(query: str, top_k: int = 3) -> List[Dict]:
-    """Keyword-scored retrieval over the clauses parsed from the real PDF."""
+def retrieve_covenant_clauses(query: str, top_k: int = 3, borrower_id: Optional[str] = None) -> List[Dict]:
+    """Keyword-scored retrieval over the borrower's covenant clauses."""
     q = query.lower()
+    clauses = _clauses(borrower_id)
     scored = []
-    for clause in _clauses():
+    for clause in clauses:
         hay = (clause["title"] + " " + clause["text"] + " " + (clause.get("covenant_type") or "")).lower()
         score = sum(1 for w in q.split() if len(w) > 3 and w in hay)
         if score:
             scored.append((score, clause))
     scored.sort(key=lambda s: s[0], reverse=True)
-    return [c for _, c in scored[:top_k]] or _clauses()[:1]
+    return [c for _, c in scored[:top_k]] or clauses[:1]
 
 
-def get_filings(periods: Optional[int] = None) -> List[Dict]:
-    return FILINGS[-periods:] if periods else list(FILINGS)
+def get_filings(periods: Optional[int] = None, borrower_id: Optional[str] = None) -> List[Dict]:
+    filings = _dataset(borrower_id)["filings"]
+    return filings[-periods:] if periods else list(filings)
 
 
-def calculate_ratio(covenant_type: str, period: Optional[str] = None) -> Dict:
+def calculate_ratio(covenant_type: str, period: Optional[str] = None,
+                    borrower_id: Optional[str] = None) -> Dict:
+    filings = _dataset(borrower_id)["filings"]
     filing = None
     if period:
-        filing = next((f for f in FILINGS if f["period"] == period), None)
-    filing = filing or FILINGS[-1]
+        filing = next((f for f in filings if f["period"] == period), None)
+    filing = filing or filings[-1]
 
-    clause = next((c for c in _clauses() if c.get("covenant_type") == covenant_type), None)
+    clause = next((c for c in _clauses(borrower_id) if c.get("covenant_type") == covenant_type), None)
     if clause is None:
         raise ValueError(f"No covenant of type {covenant_type}")
 
@@ -124,7 +168,7 @@ def calculate_ratio(covenant_type: str, period: Optional[str] = None) -> Dict:
     direction = clause["direction"]
 
     # apply any active signed waiver that adjusts this covenant's threshold for the period
-    eff = _effective_threshold(covenant_type, threshold, filing["period"])
+    eff = _effective_threshold(covenant_type, threshold, filing["period"], borrower_id)
     threshold = eff["threshold"]
 
     if covenant_type == "leverage":
@@ -166,7 +210,7 @@ def calculate_ratio(covenant_type: str, period: Optional[str] = None) -> Dict:
     }
 
 
-def cross_check_transactions(covenant_type: str) -> Dict:
+def cross_check_transactions(covenant_type: str, borrower_id: Optional[str] = None) -> Dict:
     affects = {
         "leverage": {"debt_drawdown": "increases Total Net Debt", "one_off_cost": "reduces EBITDA", "capex": "may increase debt/reduce headroom"},
         "interest_cover": {"debt_drawdown": "raises Net Finance Charges", "one_off_cost": "reduces EBITDA"},
@@ -174,7 +218,7 @@ def cross_check_transactions(covenant_type: str) -> Dict:
     }
     rules = affects.get(covenant_type, {})
     matched, unexplained = [], []
-    for txn in TRANSACTIONS:
+    for txn in _dataset(borrower_id)["transactions"]:
         cause = rules.get(txn["type"])
         if cause:
             matched.append({**txn, "cause": cause})
@@ -190,3 +234,30 @@ def cross_check_transactions(covenant_type: str) -> Dict:
         "explanation_count": len(matched),
         "unexplained_count": len(unexplained),
     }
+
+
+# Covenant types tested for the portfolio-status summary (kept local to avoid a
+# circular import with the runner).
+_COVENANTS = ["leverage", "interest_cover", "liquidity"]
+
+
+def portfolio_status(borrower_id: Optional[str] = None) -> Dict:
+    """Fast, deterministic severity + cause-attribution confidence for a borrower,
+    computed from the ratios and transactions only (no LLM / no governance calls).
+    Used to populate the portfolio table quickly; the full agent run adds the
+    Vultr analyst note, governance, receipt, and staleness-adjusted confidence."""
+    severity = "none"
+    confs: List[float] = []
+    for cov in _COVENANTS:
+        try:
+            r = calculate_ratio(cov, borrower_id=borrower_id)
+        except ValueError:
+            continue
+        if r["breached"]:
+            severity = "breach"
+        elif r["drifting_toward_breach"] and severity != "breach":
+            severity = "watch"
+        if r["breached"] or r["drifting_toward_breach"]:
+            confs.append(cross_check_transactions(cov, borrower_id=borrower_id)["confidence"])
+    confidence = round(sum(confs) / len(confs), 2) if confs else 1.0
+    return {"severity": severity, "confidence": confidence}

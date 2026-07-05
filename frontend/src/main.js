@@ -57,16 +57,17 @@ async function hydrateRun(run) {
 var seedRuns = {}; // borrower id -> most recent hydrated run, for header identity
 
 var api = {
-  // The backend monitors a single borrower facility; seed a run to learn its
-  // current live status and surface it as the portfolio.
-  getPortfolio: async function () {
-    var run = await hydrateRun(await jpost("/covenant/run?learning=false"));
-    var id = slug(run.borrower);
-    seedRuns[id] = run;
-    return [{ id: id, name: run.borrower, facility: run.facility, severity: run.severity, confidence: run.confidence }];
+  // The monitored portfolio: every borrower with a fast severity + confidence.
+  getPortfolio: function () {
+    return jget("/portfolio").then(function (d) {
+      return (d.borrowers || []).map(function (b) {
+        return { id: b.id, name: b.borrower, facility: b.facility, severity: b.severity, confidence: b.confidence };
+      });
+    });
   },
   runInvestigation: function (borrowerId, opts) {
     var q = new URLSearchParams();
+    if (borrowerId) q.set("borrower", borrowerId);
     if (opts && opts.attack) q.set("attack", "true");
     return jpost("/covenant/run?" + q.toString()).then(hydrateRun);
   },
@@ -518,7 +519,7 @@ function loadPortfolio() {
     portfolio = rows;
     if (rows[0]) {
       currentBorrowerId = rows[0].id;
-      if (!currentRun) currentRun = seedRuns[rows[0].id];
+      if (!currentRun) currentRun = { borrower: rows[0].name, facility: rows[0].facility };
     }
     portfolioLoaded = true; portfolioLoading = false; render();
   }).catch(function (e) {
@@ -533,7 +534,11 @@ var uploading = false, uploadResult = null, uploadError = null;
 
 function openInvestigation(id) {
   currentBorrowerId = id || currentBorrowerId;
-  currentRun = seedRuns[currentBorrowerId] || currentRun;
+  var meta = null;
+  for (var i = 0; i < portfolio.length; i++) { if (portfolio[i].id === currentBorrowerId) { meta = portfolio[i]; break; } }
+  // seed the header identity from the portfolio entry; the full run replaces it
+  currentRun = meta ? { borrower: meta.name, facility: meta.facility, severity: meta.severity, confidence: meta.confidence }
+    : (seedRuns[currentBorrowerId] || currentRun);
   ran = false; step = -1; verify = "idle"; qaOpen = false; qaMessages = [];
   uploadResult = null; uploadError = null;
   view = "Investigation"; render();
@@ -587,7 +592,8 @@ function doRun() {
     }
   }
 
-  fetch(API + "/covenant/run/stream").then(function (resp) {
+  var streamUrl = API + "/covenant/run/stream" + (currentBorrowerId ? "?borrower=" + encodeURIComponent(currentBorrowerId) : "");
+  fetch(streamUrl).then(function (resp) {
     if (!resp.ok || !resp.body) throw new Error("stream " + resp.status);
     var reader = resp.body.getReader(), dec = new TextDecoder(), buf = "";
     function pump() {

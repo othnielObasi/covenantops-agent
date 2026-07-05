@@ -35,9 +35,10 @@ GuardFn = Callable[[str, Dict[str, Any], Any], GuardResult]
 class CovenantAgent:
     def __init__(self, guard: Optional[GuardFn] = None, agent_id: str = "covenantops-agent",
                  inject_attack: bool = False, improver=None, recovery=None, inference=None,
-                 progress=None):
+                 progress=None, borrower_id=None):
         self.guard = guard
         self.agent_id = agent_id
+        self.borrower_id = borrower_id       # which portfolio borrower to investigate
         self.inject_attack = inject_attack   # demo: plant a malicious instruction in a document result
         self.improver = improver             # optional SelfImprovement; enables cross-run learning
         self.recovery = recovery             # optional RecoveryContext; checkpoint + resume
@@ -64,8 +65,9 @@ class CovenantAgent:
 
     def run(self, task_id: Optional[str] = None) -> ExecutionTrace:
         task_id = task_id or new_id("task")
-        BORROWER = get_borrower()
-        FACILITY = get_facility()
+        bid = self.borrower_id
+        BORROWER = get_borrower(bid)
+        FACILITY = get_facility(bid)
         tool_calls: List[ToolCall] = []
         citations: List[Dict[str, Any]] = []
         findings: List[Dict[str, Any]] = []
@@ -73,7 +75,7 @@ class CovenantAgent:
 
         # 1. plan & retrieve clauses (from the ingested real PDF)
         self._progress("plan")
-        clauses = retrieve_covenant_clauses("financial covenant leverage interest cover liquidity ratio")
+        clauses = retrieve_covenant_clauses("financial covenant leverage interest cover liquidity ratio", borrower_id=bid)
         g = self._call("retrieve_covenant_clauses", {"query": "financial covenants"},
                        {"clauses": [c["id"] for c in clauses]}, tool_calls)
         guard_paths.add(g.guard_path)
@@ -83,7 +85,7 @@ class CovenantAgent:
         self._progress("retrieve_clauses")
 
         # 2. filings
-        filings = get_filings(periods=4)
+        filings = get_filings(periods=4, borrower_id=bid)
         self._call("get_filings", {"periods": 4}, {"periods": [f["period"] for f in filings]}, tool_calls)
         self._progress("pull_filings")
 
@@ -92,14 +94,14 @@ class CovenantAgent:
             # resume: skip covenants already completed before an interruption
             if self.recovery is not None and self.recovery.already_done(cov):
                 continue
-            ratio = calculate_ratio(cov)
+            ratio = calculate_ratio(cov, borrower_id=bid)
             self._call("calculate_ratio", {"covenant_type": cov}, ratio, tool_calls)
             citations.append({"source": ratio.get("source_document", "credit_agreement"),
                               "clause_id": ratio["covenant_id"], "metric": ratio["metric"],
                               "page": ratio.get("source_page")})
             finding = {"covenant": cov, "ratio": ratio, "cross_check": None}
             if ratio["drifting_toward_breach"] or ratio["breached"]:
-                cc = cross_check_transactions(cov)
+                cc = cross_check_transactions(cov, borrower_id=bid)
                 if self.improver is not None:
                     from app.agent.learning import apply_lessons_to_crosscheck
                     cc = apply_lessons_to_crosscheck(cc, self.improver, ratio.get("period"), BORROWER)
@@ -131,14 +133,18 @@ class CovenantAgent:
         import logging
         _log = logging.getLogger("covenantops.accountability")
         docs, ch = [], None
-        try:
-            from app.trust.context_health import build_context_health
-            from app.tools.ingestion import ingest_directory
-            import os
-            docs = ingest_directory(os.environ.get("COVENANTOPS_EVIDENCE_DIR", "data/evidence"))
-            ch = build_context_health(docs)
-        except Exception as e:
-            _log.exception("context health failed: %s", e)
+        # The document evidence pack belongs to the lead borrower; only run context
+        # health / freshness against it for that borrower, so its warnings and the
+        # resulting staleness penalty do not contaminate other portfolio borrowers.
+        if bid in (None, "", "meridian"):
+            try:
+                from app.trust.context_health import build_context_health
+                from app.tools.ingestion import ingest_directory
+                import os
+                docs = ingest_directory(os.environ.get("COVENANTOPS_EVIDENCE_DIR", "data/evidence"))
+                ch = build_context_health(docs)
+            except Exception as e:
+                _log.exception("context health failed: %s", e)
 
         # staleness signals: expired waivers and stale (wrong-period) learned lessons
         # that were surfaced as suggestions rather than confirmed causes.

@@ -54,11 +54,28 @@ def _trace_summary(trace) -> dict:
     }
 
 
+@router.get("/api/portfolio")
+def portfolio():
+    """The monitored portfolio: every borrower with a fast severity + confidence.
+    The full agent run (with governance, Vultr analyst note, and receipt) happens
+    when a borrower is opened and investigated."""
+    from app.tools.finance_tools import list_borrowers, portfolio_status
+    out = []
+    for b in list_borrowers():
+        try:
+            status = portfolio_status(b["id"])
+        except Exception:
+            status = {"severity": "none", "confidence": 1.0}
+        out.append({"id": b["id"], "borrower": b["borrower"], "facility": b["facility"], **status})
+    return {"borrowers": out}
+
+
 @router.post("/api/covenant/run")
 def covenant_run(
     learning: bool = Query(True, description="enable cross-run self-improvement"),
     attack: bool = Query(False, description="inject a malicious instruction to demo the guard"),
     fail_after: Optional[int] = Query(None, description="inject a failure after covenant index N (demo)"),
+    borrower: Optional[str] = Query(None, description="portfolio borrower id (defaults to the lead borrower)"),
 ):
     improver = _improver if learning else None
     recovery = None
@@ -67,7 +84,8 @@ def covenant_run(
         recovery = RecoveryContext(_checkpoints, task_id="task_" + _new(), fail_after=fail_after)
         task_id = recovery.task_id
     agent = CovenantAgent(guard=_governance.guard, inject_attack=attack,
-                          improver=improver, recovery=recovery, inference=_inference)
+                          improver=improver, recovery=recovery, inference=_inference,
+                          borrower_id=borrower)
     try:
         trace = agent.run(task_id=task_id)
     except RunInterrupted as e:
@@ -83,6 +101,7 @@ def covenant_run(
 def covenant_run_stream(
     learning: bool = Query(True),
     attack: bool = Query(False),
+    borrower: Optional[str] = Query(None),
 ):
     """Run the agent while streaming REAL per-step progress as Server-Sent Events.
 
@@ -101,7 +120,7 @@ def covenant_run_stream(
     events: "_queue.Queue" = _queue.Queue()
     improver = _improver if learning else None
     agent = CovenantAgent(guard=_governance.guard, inject_attack=attack,
-                          improver=improver, inference=_inference,
+                          improver=improver, inference=_inference, borrower_id=borrower,
                           progress=lambda step: events.put({"type": "progress", "step": step}))
     outcome: Dict[str, Any] = {}
 
