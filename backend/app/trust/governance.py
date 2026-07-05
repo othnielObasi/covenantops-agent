@@ -25,8 +25,10 @@ import httpx
 from app.models import GuardDecision, GuardPath, GuardResult
 
 # Tools whose output carries free text sourced from documents or transactions,
-# and so must be scanned for injection/PII before the agent trusts it.
-_DOC_TOOLS = {"retrieve_covenant_clauses", "get_filings", "cross_check_transactions"}
+# and so must be scanned for injection/PII before the agent trusts it. The
+# clarifying Q&A is included: the user's question and the model's answer are both
+# free text and must pass the same governance boundary as any other tool.
+_DOC_TOOLS = {"retrieve_covenant_clauses", "get_filings", "cross_check_transactions", "covenant_qa"}
 
 # Risk contributed by a matched pattern, before capping at 100.
 _CRITICAL = 90   # a single match is decisive on its own -> block

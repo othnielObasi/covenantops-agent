@@ -117,16 +117,20 @@ docker compose ps        # db should be "healthy", api + web "Up"
   `zai-org/GLM-5.2-FP8`) so completions return `content` directly. Reasoning models
   (e.g. Kimi/Qwen/MiniMax) emit `reasoning` tokens and can return empty `content`
   under a small `max_tokens`.
-- Document grounding / RAG → Vultr vector store + `POST /v1/chat/completions/RAG`.
-  Use a **VultronRetriever** model — these appear on the catalog as
-  `vultr/VultronRetrieverCore-*`, `vultr/VultronRetrieverFlash-*`,
-  `vultr/VultronRetrieverPrime-*`
-  (https://huggingface.co/collections/vultr/vultronretriever).
+- Document retrieval (real) → the covenant clauses are reranked against the
+  investigation query by a **VultronRetriever** model via `POST /v1/rerank`
+  (`VULTR_RERANK_MODEL`, default `vultr/VultronRetrieverPrime-Qwen3.5-8B`). These
+  are **ReRank** models on the catalog
+  (https://huggingface.co/collections/vultr/vultronretriever); a local keyword
+  scorer is the fallback. Each run records `retrieval_path` (`vultr` | `local`).
+- Clarifying Q&A → `POST /api/covenant/qa` answers a question about a run using the
+  chat model, grounded strictly in that run's investigation, and governed on both
+  the question and the answer (same guard boundary as every tool call).
 - Implementation: `backend/app/trust/vultr_inference.py`. Base URL
   `https://api.vultrinference.com/v1`, auth `Authorization: Bearer <key>`.
 - Transparency: `GET /api/integrations/vultr/status` reports whether inference is
-  configured and which path (`vultr` vs `local_fallback`) was last used. When a run
-  uses Vultr, the escalation memo includes an "Analyst note (Vultr inference)".
+  configured and the last path used; each run's memo includes an "Analyst note
+  (Vultr inference)" and the Diagnostics audit trail names the retrieval path.
 
 ## 6. Persistence & durability
 

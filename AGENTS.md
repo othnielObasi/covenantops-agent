@@ -73,9 +73,15 @@ runs `npm install` in `frontend/`. You normally only need to start the services.
   default-allow, so the injection demo only blocks under the local guard.
 - Vultr Serverless Inference needs the **inference** key (authenticates at
   `api.vultrinference.com`), which is different from the Vultr **account** API key
-  (`api.vultr.com`, IP-allowlisted). Set `VULTR_INFERENCE_API_KEY` +
-  `VULTR_CHAT_MODEL`. Pick a **non-reasoning** model (e.g.
-  `deepseek-ai/DeepSeek-V4-Flash`) — reasoning models (Kimi/Qwen/MiniMax) put output
-  in a `reasoning` field and return empty `content` under small `max_tokens`, so the
-  memo's "Analyst note (Vultr inference)" comes back blank. List models via
+  (`api.vultr.com`, IP-allowlisted). Set `VULTR_INFERENCE_API_KEY`,
+  `VULTR_CHAT_MODEL`, and `VULTR_RERANK_MODEL`.
+- **Use a non-reasoning chat model** (e.g. `deepseek-ai/DeepSeek-V4-Flash`) for
+  `VULTR_CHAT_MODEL`. Reasoning models (Kimi/Qwen/MiniMax) put output in a
+  `reasoning` field and return empty `content` under small `max_tokens`, so the
+  analyst note and Q&A silently fall back to local. If `inference_path` is
+  `local_fallback` while the key is valid, check the chat model first.
+- Vultr usage in a run: **retrieval** reranks clauses via `POST /v1/rerank` with a
+  VultronRetriever model (`VULTR_RERANK_MODEL`, a *ReRank* model — not embeddings);
+  **reasoning** (analyst note) and **/api/covenant/qa** use the chat model. Runs
+  record `retrieval_path` and `inference_path` (`vultr` | `local`). List models via
   `GET https://api.vultrinference.com/v1/models`.

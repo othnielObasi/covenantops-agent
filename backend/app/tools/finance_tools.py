@@ -91,6 +91,11 @@ def _clauses(borrower_id: Optional[str] = None) -> List[Dict]:
     return _dataset(borrower_id)["clauses"]
 
 
+def get_clauses(borrower_id: Optional[str] = None) -> List[Dict]:
+    """All covenant clauses for a borrower (retrieval candidate set)."""
+    return list(_clauses(borrower_id))
+
+
 # Backwards-compatible module attributes (resolved lazily via __getattr__ below).
 def __getattr__(name):
     if name == "CLAUSES":

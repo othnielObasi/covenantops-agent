@@ -88,6 +88,16 @@ var api = {
   getHistory: function () {
     return jget("/runs").then(function (d) { return d.runs || []; });
   },
+  // Real, governed, Vultr-backed clarifying Q&A grounded in a specific run.
+  qa: function (traceId, question) {
+    return fetch(API + "/covenant/qa", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trace_id: traceId, question: question }),
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || ("qa " + r.status)); });
+      return r.json();
+    });
+  },
   // Runs the real Ed25519 verification on the server.
   //  - honest verify: hit the server-side verify endpoint so the stored receipt
   //    is checked byte-for-byte. (Round-tripping the receipt through JS JSON
@@ -349,7 +359,12 @@ function qaPanel() {
   var msgs = qaMessages.map(function (m) {
     var isUser = m.role === "user";
     var avatarBg = isUser ? C.signal + "20" : "#FF8C4220", avatarColor = isUser ? C.signal : "#FF8C42";
-    var govBadge = !isUser ? '<div class="qagovbadge"><span style="width:10px;height:10px;border-radius:2px;background:linear-gradient(135deg,' + C.oxblood + ',#FF8C42);display:inline-block"></span><span style="color:' + C.signal + '">governed</span><span>\u00b7 answered from this run\'s evidence only</span></div>' : "";
+    var meta = m.meta || {};
+    var pathLabel = meta.blocked ? "blocked by governance guard"
+      : meta.inference_path === "vultr" ? "Vultr inference \u00b7 grounded in this run"
+      : meta.inference_path === "local_fallback" ? "local fallback \u00b7 grounded in this run"
+      : "grounded in this run";
+    var govBadge = !isUser ? '<div class="qagovbadge"><span style="width:10px;height:10px;border-radius:2px;background:linear-gradient(135deg,' + C.oxblood + ',#FF8C42);display:inline-block"></span><span style="color:' + C.signal + '">governed</span><span>\u00b7 ' + esc(pathLabel) + '</span></div>' : "";
     return '<div class="qarow' + (isUser ? " user" : "") + '"><div class="qaavatar" style="background:' + avatarBg + ';color:' + avatarColor + '">' + (isUser ? "A1" : "AI") + '</div>' +
       '<div class="qabubble" style="background:' + (isUser ? C.signal + "10" : "#16161F") + ';border:1px solid ' + (isUser ? C.signal + "20" : "#1E1E2E") + '">' + esc(m.content) + govBadge + '</div></div>';
   }).join("");
@@ -416,7 +431,8 @@ function buildAuditTimeline(run) {
   var guardPath = (run.evaluation && run.evaluation.signals && run.evaluation.signals.guard_path) || "local_fallback";
   var events = [];
   events.push({ actor: "agent", action: "investigation planned", entity: run.borrower, detail: "Plan created before any retrieval \u2014 the agent decides its own steps for this facility." });
-  events.push({ actor: "agent", action: "clauses retrieved", entity: "credit_agreement.pdf", detail: "Retrieved " + (run.findings || []).length + " governing covenant clause(s) from the signed agreement." });
+  var retr = run.retrieval_path === "vultr" ? "ranked by VultronRetriever on Vultr Serverless Inference" : "via the local keyword retriever";
+  events.push({ actor: "agent", action: "clauses retrieved", entity: run.retrieval_path === "vultr" ? "VultronRetriever" : "local", detail: "Retrieved " + (run.findings || []).length + " governing covenant clause(s), " + retr + "." });
   events.push({ actor: "agent", action: "filings retrieved", entity: (run.findings && run.findings[0] && run.findings[0].ratio.period) || "latest period", detail: "Pulled borrower filings to establish the trend for the current reporting period." });
   events.push({ actor: "governance", action: "tool calls evaluated", entity: guardPath, detail: "Every tool call in this run was evaluated by the " + (guardPath == "airg" ? "AIRG governance API" : "local fallback guard") + "; no blocks raised on clean evidence." });
   (run.findings || []).forEach(function (f) {
@@ -634,11 +650,19 @@ function qaKeydown(e) {
   if (!question || qaLoading) return;
   qaMessages.push({ role: "user", content: question });
   qaInput = ""; qaLoading = true; render();
-  setTimeout(function () {
-    qaMessages.push({ role: "assistant", content: answerQa(question) });
+  function done(content, meta) {
+    qaMessages.push({ role: "assistant", content: content, meta: meta || {} });
     qaLoading = false; render();
     var box = document.getElementById("qaInputBox"); if (box) box.focus();
-  }, 700 + Math.random() * 500);
+  }
+  var tid = currentRun && currentRun.trace_id;
+  if (!tid) { done("Run this borrower's investigation first, then I can answer from its evidence.", { inference_path: "none" }); return; }
+  // Real, governed, Vultr-backed Q&A grounded in this run.
+  api.qa(tid, question).then(function (res) {
+    done(res.answer, { inference_path: res.inference_path, guard_path: res.guard_path, blocked: res.blocked });
+  }).catch(function () {
+    done(answerQa(question), { inference_path: "local_fallback" }); // deterministic fallback
+  });
 }
 function answerQa(q) {
   var run = currentRun, lq = q.toLowerCase();

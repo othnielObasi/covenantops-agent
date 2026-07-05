@@ -15,7 +15,7 @@ from app.models import ExecutionTrace, GuardPath, GuardResult, ToolCall, TraceSt
 from app.agent.memo import build_memo
 from app.tools.finance_tools import (
     retrieve_covenant_clauses, get_filings, calculate_ratio, cross_check_transactions,
-    get_borrower, get_facility,
+    get_borrower, get_facility, get_clauses,
 )
 
 COVENANTS_TO_TEST = ["leverage", "interest_cover", "liquidity"]
@@ -75,8 +75,22 @@ class CovenantAgent:
 
         # 1. plan & retrieve clauses (from the ingested real PDF)
         self._progress("plan")
-        clauses = retrieve_covenant_clauses("financial covenant leverage interest cover liquidity ratio", borrower_id=bid)
-        g = self._call("retrieve_covenant_clauses", {"query": "financial covenants"},
+        _query = "financial covenant leverage interest cover liquidity ratio"
+        # Document retrieval: semantically rank the borrower's covenant clauses with a
+        # VultronRetriever model on Vultr Serverless Inference; fall back to the local
+        # keyword scorer if Vultr is unavailable. Record which retrieval path was used.
+        retrieval_path = "local"
+        clauses = None
+        if self.inference is not None:
+            candidates = get_clauses(bid)
+            ranked = self.inference.rerank(_query, [f"{c['title']}: {c['text']}" for c in candidates], top_n=3)
+            if ranked:
+                clauses = [candidates[i] for i, _ in ranked][:3]
+                retrieval_path = "vultr"
+        if clauses is None:
+            clauses = retrieve_covenant_clauses(_query, borrower_id=bid)
+        g = self._call("retrieve_covenant_clauses",
+                       {"query": "financial covenants", "retriever": self.inference.rerank_model if retrieval_path == "vultr" else "local_keyword"},
                        {"clauses": [c["id"] for c in clauses]}, tool_calls)
         guard_paths.add(g.guard_path)
         for c in clauses:
@@ -220,6 +234,7 @@ class CovenantAgent:
                 "citations": citations,
                 "findings": findings,
                 "inference_path": inference_path,
+                "retrieval_path": retrieval_path,
             },
         )
         # self-improvement: reflect on this run and curate lessons (poisoning-gated)

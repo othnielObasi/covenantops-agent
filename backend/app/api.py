@@ -42,6 +42,8 @@ def _trace_summary(trace) -> dict:
         "severity": trace.metadata.get("severity"),
         "confidence": trace.metadata.get("confidence"),
         "guard_path": trace.guard_path.value,
+        "retrieval_path": trace.metadata.get("retrieval_path"),
+        "inference_path": trace.metadata.get("inference_path"),
         "lessons_promoted": trace.metadata.get("lessons_promoted", 0),
         "memo": trace.final_output,
         "citations": trace.metadata.get("citations", []),
@@ -169,6 +171,68 @@ def covenant_resume(task_id: str, learning: bool = Query(True)):
     out = _trace_summary(trace)
     out["resumed"] = True
     return out
+
+
+@router.post("/api/covenant/qa")
+def covenant_qa(payload: Dict[str, Any]):
+    """Clarifying Q&A about a specific run, answered by Vultr Serverless Inference,
+    grounded ONLY in that run's investigation, and governed on both the incoming
+    question and the outgoing answer (same guard boundary as every tool call)."""
+    from app.models import GuardDecision
+
+    question = str(payload.get("question", "")).strip()
+    trace_id = payload.get("trace_id")
+    if not question:
+        raise HTTPException(status_code=400, detail="Empty question.")
+    if len(question) > 1000:
+        raise HTTPException(status_code=400, detail="Question too long.")
+    trace = _traces.get(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Run this borrower's investigation first.")
+
+    # Govern the incoming question (untrusted user input).
+    gin = _governance.guard("covenant_qa", {"question": question}, {"text": question})
+    if gin.decision == GuardDecision.block:
+        return {"answer": "That request was blocked by the governance guard and not sent to the model.",
+                "governed": True, "blocked": True, "guard_path": _governance.last_path.value,
+                "inference_path": "none", "trace_id": trace_id}
+
+    # Ground strictly in this run's investigation.
+    md = trace.metadata
+    lines = [f"Borrower: {md.get('borrower')}", f"Facility: {md.get('facility')}",
+             f"Overall severity: {md.get('severity')}", f"Confidence: {md.get('confidence')}"]
+    for f in md.get("findings", []):
+        r = f["ratio"]
+        state = "breached" if r["breached"] else "drifting toward breach" if r["drifting_toward_breach"] else "within limits"
+        lines.append(f"- {r['covenant_id']} {r['metric']}: {r['value']} vs limit {r['threshold']} ({state})"
+                     + (f", waiver {r['waiver_applied']} applied" if r.get("waiver_applied") else ""))
+        cc = f.get("cross_check") or {}
+        for m in cc.get("matched", []):
+            lines.append(f"    cause: {m['id']} {m.get('note','')} -> {m['cause']}")
+        for u in cc.get("unexplained", []):
+            lines.append(f"    UNEXPLAINED: {u['id']} {u.get('note','')}")
+    context = "\n".join(lines)
+
+    system = ("You are a credit-risk analyst assistant for a covenant-monitoring team. "
+              "Answer the user's question using ONLY the covenant investigation context provided. "
+              "If the answer is not in the context, say you don't have that information in this run. "
+              "Be precise, concise, and conservative; never invent figures.")
+    answer = _inference.reason(prompt=f"Investigation context:\n{context}\n\nQuestion: {question}",
+                               system=system, max_tokens=400)
+    inference_path = _inference.last_used
+    if not answer:
+        answer = ("Vultr inference is unavailable, so I can't answer freely. From this run: "
+                  f"{md.get('borrower')} is {md.get('severity')} with "
+                  f"{round(float(md.get('confidence') or 0) * 100)}% cause-attribution confidence.")
+        inference_path = "local_fallback"
+
+    # Govern the outgoing answer too.
+    gout = _governance.guard("covenant_qa", {}, {"text": answer})
+    if gout.decision == GuardDecision.block:
+        answer = "The generated answer was withheld by the governance guard."
+    return {"answer": answer, "governed": True, "blocked": False,
+            "guard_path": _governance.last_path.value, "inference_path": inference_path,
+            "trace_id": trace_id}
 
 
 @router.get("/api/traces/{trace_id}/receipt")
