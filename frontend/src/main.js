@@ -259,20 +259,29 @@ function vPortfolio() {
     '</div>';
 }
 
-// Live workflow list. Reflects the real progress events streamed from the backend:
-// completed steps show a check, the running step shows a spinner + its live detail,
-// and pending steps are numbered.
-function workflowList() {
-  return '<ol class="flow">' + STEPS.map(function (s, i) {
-    var done = step > i;
-    var active = running && step === i;
-    var mark = done ? "\u2713"
-      : active ? '<span class="spinner" style="width:11px;height:11px;border-width:2px;border-color:#2E2E3E;border-top-color:' + C.oxblood + '"></span>'
-      : (i + 1);
-    return '<li><span class="num' + (done ? " done" : "") + '"' + (active ? ' style="background:#FF444422;color:#FF4444"' : "") + '>' + mark + '</span>' +
-      '<div><div style="font-size:13px;color:' + (done || active ? "#E0E0E8" : C.mute) + '">' + s + '</div>' +
-      (active ? '<div style="font-size:11px;color:' + C.mute + '">' + STEP_DESC[STEP_KEYS[i]] + '\u2026</div>' : "") + '</div></li>';
-  }).join("") + '</ol>';
+// The agent's live activity, streamed INSIDE the run space. Before a run this is a
+// compact one-line description; while running, each step is revealed as its real
+// progress event arrives from the backend (SSE) — the current step shows a spinner
+// and live detail, finished steps show a check. Steps are NOT pre-listed in a panel.
+function runActivity() {
+  if (!running && step < 0) {
+    return '<div style="margin-top:14px;font-size:11px;color:' + C.mute + ';letter-spacing:.03em">multi-step agent workflow \u00b7 ' + STEPS.join(" \u2192 ") + '</div>';
+  }
+  var upto = Math.min(step, STEPS.length - 1);
+  var rows = [];
+  for (var i = 0; i <= upto; i++) {
+    var active = running && i === step;
+    var mark = active
+      ? '<span class="spinner" style="width:12px;height:12px;border-width:2px;border-color:#2E2E3E;border-top-color:' + C.oxblood + ';display:inline-block;vertical-align:middle"></span>'
+      : '<span style="color:' + C.signal + '">\u2713</span>';
+    rows.push('<div style="display:flex;align-items:baseline;gap:10px;padding:6px 0;animation:pop .35s ease both">' +
+      '<span style="width:16px;flex:none;display:inline-flex;justify-content:center">' + mark + '</span>' +
+      '<span style="font-size:13px;color:' + (active ? "#E0E0E8" : "#B8B8C8") + ';font-weight:' + (active ? "600" : "400") + '">' + STEPS[i] + '</span>' +
+      (active ? '<span style="font-size:11px;color:' + C.mute + '">\u2014 ' + esc(STEP_DESC[STEP_KEYS[i]]) + '\u2026</span>' : "") +
+      '</div>');
+  }
+  var kicker = running ? '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#6B6B80;margin-bottom:4px">Agent activity \u00b7 live</div>' : "";
+  return '<div style="margin-top:16px;border-top:1px solid #1E1E2E;padding-top:14px">' + kicker + rows.join("") + '</div>';
 }
 
 function vInvestigation() {
@@ -290,9 +299,9 @@ function vInvestigation() {
     var runBtn = running
       ? '<button class="runbtn" disabled style="opacity:.65;cursor:progress">Investigating\u2026</button>'
       : '<button class="runbtn" onclick="doRun()">Run covenant check</button>';
-    return borrowerHead + '<div class="grid2 a">' +
-      panel("Run investigation", "the agent", '<p class="lead">CovenantOps Agent plans a covenant check, grounds it in the borrower\'s real documents, re-verifies each ratio, cross-checks transactions for a cause, and produces a memo you can verify.</p>' + runBtn) +
-      panel("Workflow", running ? "live \u00b7 running" : "multi-step", workflowList()) + '</div>' +
+    // The workflow streams INSIDE this run panel (runActivity), not in a side list.
+    var runBody = '<p class="lead">CovenantOps Agent plans a covenant check, grounds it in the borrower\'s real documents, re-verifies each ratio, cross-checks transactions for a cause, and produces a memo you can verify.</p>' + runBtn + runActivity();
+    return borrowerHead + panel("Run investigation", running ? "agent working\u2026" : "the agent", runBody) +
       '<div style="margin-top:20px">' + uploadPanel() + '</div>';
   }
 
