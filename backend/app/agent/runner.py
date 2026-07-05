@@ -34,13 +34,22 @@ GuardFn = Callable[[str, Dict[str, Any], Any], GuardResult]
 
 class CovenantAgent:
     def __init__(self, guard: Optional[GuardFn] = None, agent_id: str = "covenantops-agent",
-                 inject_attack: bool = False, improver=None, recovery=None, inference=None):
+                 inject_attack: bool = False, improver=None, recovery=None, inference=None,
+                 progress=None):
         self.guard = guard
         self.agent_id = agent_id
         self.inject_attack = inject_attack   # demo: plant a malicious instruction in a document result
         self.improver = improver             # optional SelfImprovement; enables cross-run learning
         self.recovery = recovery             # optional RecoveryContext; checkpoint + resume
         self.inference = inference           # optional VultrInference; real reasoning on Vultr
+        self.progress = progress             # optional callback(step_key) fired as each phase completes
+
+    def _progress(self, step: str) -> None:
+        if self.progress is not None:
+            try:
+                self.progress(step)
+            except Exception:
+                pass  # progress reporting must never break the run
 
     def _call(self, tool: str, args: Dict[str, Any], output: Any, tool_calls: List[ToolCall]) -> GuardResult:
         out = output if isinstance(output, dict) else {"result": output}
@@ -63,6 +72,7 @@ class CovenantAgent:
         guard_paths: set = set()
 
         # 1. plan & retrieve clauses (from the ingested real PDF)
+        self._progress("plan")
         clauses = retrieve_covenant_clauses("financial covenant leverage interest cover liquidity ratio")
         g = self._call("retrieve_covenant_clauses", {"query": "financial covenants"},
                        {"clauses": [c["id"] for c in clauses]}, tool_calls)
@@ -70,10 +80,12 @@ class CovenantAgent:
         for c in clauses:
             citations.append({"source": c.get("source_document", "credit_agreement"),
                               "clause_id": c["id"], "title": c["title"], "page": c.get("source_page")})
+        self._progress("retrieve_clauses")
 
         # 2. filings
         filings = get_filings(periods=4)
         self._call("get_filings", {"periods": 4}, {"periods": [f["period"] for f in filings]}, tool_calls)
+        self._progress("pull_filings")
 
         # 3. calculate ratios; 4. cross-check flagged (with checkpoint/resume)
         for cov in COVENANTS_TO_TEST:
@@ -106,6 +118,12 @@ class CovenantAgent:
             for f in findings:
                 merged[f["covenant"]] = f
             findings = [merged[c] for c in COVENANTS_TO_TEST if c in merged]
+
+        # ratios re-verified, effective thresholds (with waivers) resolved, and
+        # transactions cross-checked for the flagged covenants
+        self._progress("calculate")
+        self._progress("apply_waiver")
+        self._progress("cross_check")
 
         # context health is computed here (not just as a post-hoc extra) because its
         # warnings feed the staleness penalty on the confidence score below. A failure
@@ -167,6 +185,7 @@ class CovenantAgent:
             inference_path = getattr(self.inference, "last_used", "none")
             if analyst_note:
                 memo = memo + "\n\nAnalyst note (Vultr inference):\n" + analyst_note.strip()
+        self._progress("memo")
 
         # resolve overall guard path
         gp = GuardPath.none

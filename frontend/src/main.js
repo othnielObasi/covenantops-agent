@@ -113,6 +113,18 @@ var api = {
 var screen = "landing"; // landing | signin | app
 var view = "Portfolio", ran = false, step = -1, verify = "idle";
 var STEPS = ["Plan", "Retrieve clauses", "Pull filings", "Calculate", "Apply waiver", "Cross-check", "Memo"];
+// Keys match the real progress events emitted by the backend agent (see api.py).
+var STEP_KEYS = ["plan", "retrieve_clauses", "pull_filings", "calculate", "apply_waiver", "cross_check", "memo"];
+var STEP_DESC = {
+  plan: "Planning the covenant investigation",
+  retrieve_clauses: "Retrieving governing covenant clauses",
+  pull_filings: "Pulling borrower filings & trend",
+  calculate: "Re-verifying each covenant ratio",
+  apply_waiver: "Applying active signed waivers",
+  cross_check: "Cross-checking transactions for a cause",
+  memo: "Generating memo, Vultr analyst note & signed receipt",
+};
+var running = false, streamSettled = false;
 var VIEWS = ["Portfolio", "Investigation", "History", "Diagnostics"];
 var signinLoading = false;
 
@@ -236,6 +248,22 @@ function vPortfolio() {
     '</div>';
 }
 
+// Live workflow list. Reflects the real progress events streamed from the backend:
+// completed steps show a check, the running step shows a spinner + its live detail,
+// and pending steps are numbered.
+function workflowList() {
+  return '<ol class="flow">' + STEPS.map(function (s, i) {
+    var done = step > i;
+    var active = running && step === i;
+    var mark = done ? "\u2713"
+      : active ? '<span class="spinner" style="width:11px;height:11px;border-width:2px;border-color:#2E2E3E;border-top-color:' + C.oxblood + '"></span>'
+      : (i + 1);
+    return '<li><span class="num' + (done ? " done" : "") + '"' + (active ? ' style="background:#FF444422;color:#FF4444"' : "") + '>' + mark + '</span>' +
+      '<div><div style="font-size:13px;color:' + (done || active ? "#E0E0E8" : C.mute) + '">' + s + '</div>' +
+      (active ? '<div style="font-size:11px;color:' + C.mute + '">' + STEP_DESC[STEP_KEYS[i]] + '\u2026</div>' : "") + '</div></li>';
+  }).join("") + '</ol>';
+}
+
 function vInvestigation() {
   var run = currentRun;
   if (!run) return panel("Investigation", "idle", '<div class="empty">Select a borrower from the Portfolio to begin.</div>');
@@ -248,11 +276,12 @@ function vInvestigation() {
     '</div>';
 
   if (!ran) {
-    var proof = ["Plans before answering", "Retrieves more than once", "Calls calculation tools", "Makes explicit risk decisions", "Runs context-integrity checks", "Signs a verifiable receipt"].map(function (x) { return '<div>\u2713 ' + x + '</div>'; }).join("");
-    var flow = '<ol class="flow">' + STEPS.map(function (s, i) { var done = step > i; return '<li><span class="num' + (done ? ' done' : '') + '">' + (done ? '\u2713' : (i + 1)) + '</span><span style="font-size:13px;color:' + (done ? '#E0E0E8' : C.mute) + '">' + s + '</span></li>'; }).join("") + '</ol>';
+    var runBtn = running
+      ? '<button class="runbtn" disabled style="opacity:.65;cursor:progress">Investigating\u2026</button>'
+      : '<button class="runbtn" onclick="doRun()">Run covenant check</button>';
     return borrowerHead + '<div class="grid2 a">' +
-      panel("Run investigation", "the agent", '<p class="lead">CovenantOps Agent plans a covenant check, grounds it in the borrower\'s real documents, re-verifies each ratio, and explains any drift toward breach.</p><button class="runbtn" onclick="doRun()">Run covenant check</button>') +
-      '<div class="stack">' + panel("Why this is not basic RAG", "agent proof", '<div class="proof">' + proof + '</div>') + panel("Workflow", "multi-step", flow) + '</div></div>' +
+      panel("Run investigation", "the agent", '<p class="lead">CovenantOps Agent plans a covenant check, grounds it in the borrower\'s real documents, re-verifies each ratio, cross-checks transactions for a cause, and produces a memo you can verify.</p>' + runBtn) +
+      panel("Workflow", running ? "live \u00b7 running" : "multi-step", workflowList()) + '</div>' +
       '<div style="margin-top:20px">' + uploadPanel() + '</div>';
   }
 
@@ -523,15 +552,61 @@ function onEvidenceFile(e) {
     uploading = false; uploadError = String((err && err.message) || err); render();
   });
 }
+// Runs the agent and advances the workflow from REAL progress events streamed by
+// the backend (Server-Sent Events). No timers — each step lights up when that phase
+// actually completes. Falls back to the plain POST run if streaming is unavailable.
 function doRun() {
-  ran = false; step = 0; verify = "idle"; render();
-  var fetchDone = false, animDone = false, result = null;
-  function maybeFinish() { if (fetchDone && animDone) { currentRun = result; seedRuns[currentBorrowerId] = result; ran = true; render(); } }
-  api.runInvestigation(currentBorrowerId, {}).then(function (r) { result = r; fetchDone = true; maybeFinish(); })
-    .catch(function (e) { portfolioError = String((e && e.message) || e); render(); });
-  api.getEvidence(currentBorrowerId).then(function (ev) { currentEvidence = ev; });
-  api.getHistory(currentBorrowerId).then(function (h) { currentHistory = h; });
-  var s = 0; var t = setInterval(function () { s++; step = s; if (s >= STEPS.length - 1) { clearInterval(t); animDone = true; maybeFinish(); } render(); }, 240);
+  ran = false; step = 0; running = true; streamSettled = false; verify = "idle"; render();
+  api.getEvidence().then(function (ev) { currentEvidence = ev; });
+
+  function settleResult(r) {
+    if (streamSettled) return;
+    streamSettled = true;
+    step = STEPS.length; // all steps complete
+    hydrateRun(r).then(function () {
+      currentRun = r; seedRuns[currentBorrowerId] = r; ran = true; running = false; render();
+    });
+    api.getHistory().then(function (h) { currentHistory = h; render(); }).catch(function () {});
+  }
+  function fail(msg) {
+    if (streamSettled) return;
+    streamSettled = true; running = false; portfolioError = msg; render();
+  }
+  function fallback() {
+    if (streamSettled) return;
+    api.runInvestigation(currentBorrowerId, {}).then(settleResult).catch(function (e) { fail(String((e && e.message) || e)); });
+  }
+  function handle(msg) {
+    if (msg.type === "progress") {
+      var i = STEP_KEYS.indexOf(msg.step);
+      if (i >= 0 && i >= step) { step = i; render(); }
+    } else if (msg.type === "result") {
+      settleResult(msg.run);
+    } else if (msg.type === "error") {
+      fallback(); // try the non-streaming path before surfacing an error
+    }
+  }
+
+  fetch(API + "/covenant/run/stream").then(function (resp) {
+    if (!resp.ok || !resp.body) throw new Error("stream " + resp.status);
+    var reader = resp.body.getReader(), dec = new TextDecoder(), buf = "";
+    function pump() {
+      return reader.read().then(function (res) {
+        if (res.done) return;
+        buf += dec.decode(res.value, { stream: true });
+        var frames = buf.split("\n\n"); buf = frames.pop();
+        frames.forEach(function (frame) {
+          var data = frame.split("\n").filter(function (l) { return l.indexOf("data:") === 0; })
+            .map(function (l) { return l.slice(5).trim(); }).join("");
+          if (!data) return;
+          try { handle(JSON.parse(data)); } catch (_) { /* ignore keep-alives */ }
+        });
+        return pump();
+      });
+    }
+    return pump();
+  }).then(function () { if (!streamSettled) fallback(); })
+    .catch(function () { fallback(); });
 }
 function doVerify() {
   verify = "checking"; render();

@@ -79,6 +79,64 @@ def covenant_run(
     return _trace_summary(trace)
 
 
+@router.get("/api/covenant/run/stream")
+def covenant_run_stream(
+    learning: bool = Query(True),
+    attack: bool = Query(False),
+):
+    """Run the agent while streaming REAL per-step progress as Server-Sent Events.
+
+    Events (JSON in each `data:` frame):
+      {"type":"progress","step":"plan|retrieve_clauses|pull_filings|calculate|
+                                  apply_waiver|cross_check|memo"}
+      {"type":"result","run": <trace summary>}
+      {"type":"error","message": ...}
+    Each progress event fires when that phase actually completes in the runner,
+    so the UI timeline reflects the true execution (including slow LLM/guard calls).
+    """
+    import json as _json
+    import queue as _queue
+    import threading as _threading
+
+    events: "_queue.Queue" = _queue.Queue()
+    improver = _improver if learning else None
+    agent = CovenantAgent(guard=_governance.guard, inject_attack=attack,
+                          improver=improver, inference=_inference,
+                          progress=lambda step: events.put({"type": "progress", "step": step}))
+    outcome: Dict[str, Any] = {}
+
+    def _worker():
+        try:
+            trace = agent.run()
+            _traces[trace.id] = trace
+            _memory.save_run(trace)
+            outcome["trace"] = trace
+        except Exception as e:  # pragma: no cover - defensive
+            outcome["error"] = f"{type(e).__name__}: {e}"
+        finally:
+            events.put({"type": "__done__"})
+
+    def _gen():
+        worker = _threading.Thread(target=_worker, daemon=True)
+        worker.start()
+        while True:
+            ev = events.get()
+            if ev.get("type") == "__done__":
+                break
+            yield f"data: {_json.dumps(ev)}\n\n"
+        worker.join()
+        if "trace" in outcome:
+            yield f"data: {_json.dumps({'type': 'result', 'run': _trace_summary(outcome['trace'])})}\n\n"
+        else:
+            yield f"data: {_json.dumps({'type': 'error', 'message': outcome.get('error', 'run failed')})}\n\n"
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
+
+
 @router.post("/api/covenant/resume/{task_id}")
 def covenant_resume(task_id: str, learning: bool = Query(True)):
     cp = _checkpoints.load(task_id)
