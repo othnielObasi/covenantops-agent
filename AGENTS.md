@@ -61,3 +61,16 @@ runs `npm install` in `frontend/`. You normally only need to start the services.
   `persistent:false`.
 - The compose stack binds host ports 3000/8000; stop the local dev servers first
   to avoid port conflicts.
+
+### External integrations (AIRG + Vultr) — keys go in `.env` (untracked)
+- `AIRG_URL` + `AIRG_API_KEY` enable the hosted governance path (`guard_path:airg`);
+  without both, the deterministic local guard is used. Note the AIRG account may
+  default-allow, so the injection demo only blocks under the local guard.
+- Vultr Serverless Inference needs the **inference** key (authenticates at
+  `api.vultrinference.com`), which is different from the Vultr **account** API key
+  (`api.vultr.com`, IP-allowlisted). Set `VULTR_INFERENCE_API_KEY` +
+  `VULTR_CHAT_MODEL`. Pick a **non-reasoning** model (e.g.
+  `deepseek-ai/DeepSeek-V4-Flash`) — reasoning models (Kimi/Qwen/MiniMax) put output
+  in a `reasoning` field and return empty `content` under small `max_tokens`, so the
+  memo's "Analyst note (Vultr inference)" comes back blank. List models via
+  `GET https://api.vultrinference.com/v1/models`.

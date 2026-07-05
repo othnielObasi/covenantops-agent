@@ -95,15 +95,28 @@ docker compose ps        # db should be "healthy", api + web "Up"
 
 ## 5. Vultr Serverless Inference
 
+- **Use the Serverless Inference API key**, created in the portal under Serverless
+  Inference — this authenticates at `https://api.vultrinference.com/v1`. It is
+  **not** the same as your Vultr **account** API key (`https://api.vultr.com`,
+  used to provision resources and often IP-allowlisted).
 - Reasoning (drift judgement, cause-attribution narration) →
   `POST /v1/chat/completions` (OpenAI-compatible), model `VULTR_CHAT_MODEL`.
+- **Choosing a model:** list your account's catalog with
+  `curl -H "Authorization: Bearer <key>" https://api.vultrinference.com/v1/models`.
+  Prefer a non-reasoning chat model (e.g. `deepseek-ai/DeepSeek-V4-Flash`,
+  `zai-org/GLM-5.2-FP8`) so completions return `content` directly. Reasoning models
+  (e.g. Kimi/Qwen/MiniMax) emit `reasoning` tokens and can return empty `content`
+  under a small `max_tokens`.
 - Document grounding / RAG → Vultr vector store + `POST /v1/chat/completions/RAG`.
-  Use a **VultronRetriever** model
-  (https://huggingface.co/collections/vultr/vultronretriever) for retrieval.
+  Use a **VultronRetriever** model — these appear on the catalog as
+  `vultr/VultronRetrieverCore-*`, `vultr/VultronRetrieverFlash-*`,
+  `vultr/VultronRetrieverPrime-*`
+  (https://huggingface.co/collections/vultr/vultronretriever).
 - Implementation: `backend/app/trust/vultr_inference.py`. Base URL
   `https://api.vultrinference.com/v1`, auth `Authorization: Bearer <key>`.
 - Transparency: `GET /api/integrations/vultr/status` reports whether inference is
-  configured and which path (`vultr` vs `local_fallback`) was last used.
+  configured and which path (`vultr` vs `local_fallback`) was last used. When a run
+  uses Vultr, the escalation memo includes an "Analyst note (Vultr inference)".
 
 ## 6. Persistence & durability
 
