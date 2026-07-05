@@ -76,11 +76,17 @@ var api = {
   getHistory: function () {
     return jget("/runs").then(function (d) { return d.runs || []; });
   },
-  // Fetches the signed receipt, optionally tampers a material field, then asks
-  // the server to run the real Ed25519 verification.
+  // Runs the real Ed25519 verification on the server.
+  //  - honest verify: hit the server-side verify endpoint so the stored receipt
+  //    is checked byte-for-byte. (Round-tripping the receipt through JS JSON
+  //    would reserialize whole-number floats like 8000000.0 -> 8000000 and break
+  //    the canonical hash, producing a false negative.)
+  //  - tamper demo: fetch the receipt, alter a material field, and POST it back;
+  //    verification correctly fails.
   verifyReceipt: async function (traceId, tampered) {
+    if (!tampered) return jget("/traces/" + traceId + "/receipt/verify");
     var receipt = await jget("/traces/" + traceId + "/receipt");
-    if (tampered && receipt && receipt.receipt) {
+    if (receipt && receipt.receipt) {
       receipt.receipt.severity = "none";
       receipt.receipt.confidence = 1.0;
     }
