@@ -15,11 +15,13 @@ reasoning running on **Vultr Serverless Inference**:
 
 | Surface | URL |
 | --- | --- |
-| **Frontend (console)** | **http://66.135.27.117:3000** |
-| API | http://66.135.27.117:8000 |
-| API docs | http://66.135.27.117:8000/docs |
+| **Frontend (console)** | **http://66.135.27.117** |
+| API | http://66.135.27.117/api |
+| API docs | http://66.135.27.117/docs |
 
-See [`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md) for the deployment guide.
+The frontend is served by nginx, which also reverse-proxies `/api` to the backend,
+so everything is one origin on port 80 (the API and database are not exposed
+publicly). See [`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md) for the deployment guide.
 
 ---
 
@@ -101,13 +103,16 @@ docker compose up --build
 
 | Service   | URL                          |
 | --------- | ---------------------------- |
-| Frontend  | http://localhost:3000        |
-| API       | http://localhost:8000        |
-| API docs  | http://localhost:8000/docs   |
+| Frontend  | http://localhost              |
+| API       | http://localhost/api         |
+| API docs  | http://localhost/docs        |
 
-The `web` container serves the built UI via the Vite preview server, which proxies
-`/api` to the `api` service — so the browser stays same-origin and no backend host
-is baked into the build. Runs persist to the `db` (PostgreSQL) service.
+The `web` container is **nginx**: it serves the built SPA and reverse-proxies `/api`
+to the `api` service, so the browser stays same-origin on port 80 and no backend
+host is baked into the build. The API and database are only reachable inside the
+compose network (not published to the host). Runs persist to the `db` (PostgreSQL)
+service. For local development use `npm run dev` (Vite dev server on :3000, which
+proxies `/api` to :8000).
 
 To deploy on **Vultr Cloud Compute** with **Vultr Serverless Inference**, see
 [`docs/DEPLOY_VULTR.md`](docs/DEPLOY_VULTR.md).

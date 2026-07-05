@@ -47,20 +47,25 @@ runs `npm install` in `frontend/`. You normally only need to start the services.
   server.
 
 ### Deployment (Docker Compose → Vultr)
-- `docker compose up --build` runs the deployable stack: `web` (Vite preview,
-  proxies `/api` → `api`), `api` (FastAPI), `db` (Postgres 16, named volume). This
-  is the exact Vultr Compute deployment; see `docs/DEPLOY_VULTR.md`.
+- `docker compose up --build` runs the production stack: `web` (**nginx** serving
+  the built SPA and reverse-proxying `/api` → `api`), `api` (FastAPI, one Uvicorn
+  worker), `db` (Postgres 16, named volume). This is the exact Vultr Compute
+  deployment; see `docs/DEPLOY_VULTR.md`.
+- **Only `web` publishes a host port (80).** The api (8000) and db (5432) are
+  internal to the compose network. Hit the app at `http://<host>/` and the API at
+  `http://<host>/api/...`. All services use `restart: unless-stopped`.
 - Docker is **not** installed by the update script. To test compose in a Cloud VM,
   install Docker first (docker-in-docker: `fuse-overlayfs` storage driver +
   `iptables-legacy`; for Docker 29 also set `features.containerd-snapshotter:false`
   in `/etc/docker/daemon.json`).
-- The `web` container serves via `vite preview` (not a bare static server) **so
-  that `/api` is proxied**; a plain static `serve` would 404 on `/api`.
+- **Single API worker by design:** signed receipts live in-process between a run and
+  its verification, so multiple workers would not share that state (runs/events are
+  durable in Postgres regardless). Don't add `--workers`/`--reload` for prod.
+- Local dev instead uses `npm run dev` (Vite dev server on :3000 proxying `/api`);
+  nginx/`vite preview` are only for the built app.
 - Postgres persistence needs `psycopg2-binary` (in `backend/requirements.txt`);
   without it TraceMemory silently falls back to in-memory and `/api/runs` reports
   `persistent:false`.
-- The compose stack binds host ports 3000/8000; stop the local dev servers first
-  to avoid port conflicts.
 
 ### External integrations (AIRG + Vultr) — keys go in `.env` (untracked)
 - `AIRG_URL` + `AIRG_API_KEY` enable the hosted governance path (`guard_path:airg`);

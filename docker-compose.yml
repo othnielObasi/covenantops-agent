@@ -1,8 +1,7 @@
 services:
   api:
     build: ./backend
-    ports:
-      - "8000:8000"
+    restart: unless-stopped
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://covenantops:covenantops@db:5432/covenantops
@@ -11,26 +10,36 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/data:/app/data
+    # Reachable only inside the compose network (via the web reverse proxy),
+    # not published to the host.
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   web:
     build: ./frontend
+    restart: unless-stopped
+    # Single public entry point: nginx serves the SPA and proxies /api -> api:8000.
     ports:
-      - "3000:3000"
-    # The Vite preview server proxies /api to this target inside the compose network,
-    # keeping the browser same-origin with the frontend.
-    environment:
-      - VITE_API_TARGET=http://api:8000
+      - "80:80"
     depends_on:
       - api
 
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=covenantops
       - POSTGRES_PASSWORD=covenantops
       - POSTGRES_DB=covenantops
-    ports:
-      - "5432:5432"
+    # Internal only — the database is not published to the host.
+    expose:
+      - "5432"
     volumes:
       - covenantops_pgdata:/var/lib/postgresql/data
     healthcheck:

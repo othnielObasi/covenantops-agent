@@ -10,14 +10,22 @@ The composed stack is three services:
 
 | Service | Image / build | Port | Purpose |
 | --- | --- | --- | --- |
-| `web` | `./frontend` (Vite build, served by `vite preview`) | 3000 | UI; proxies `/api` to `api` (same-origin, no CORS) |
-| `api` | `./backend` (FastAPI + Uvicorn) | 8000 | Agent workflow, tools, receipts |
-| `db`  | `postgres:16` | 5432 | Durable TraceMemory (runs + events) |
+| `web` | `./frontend` (Vite build served by **nginx**) | **80** (public) | Serves the SPA and reverse-proxies `/api` → `api` |
+| `api` | `./backend` (FastAPI + Uvicorn) | 8000 (internal only) | Agent workflow, tools, receipts |
+| `db`  | `postgres:16` | 5432 (internal only) | Durable TraceMemory (runs + events) |
 
-> The `web` container runs the Vite **preview** server, which applies the
-> `/api → VITE_API_TARGET` proxy from `frontend/vite.config.js`. This keeps the
-> browser same-origin with the frontend, so no backend host is baked into the
-> build and there is no CORS to configure.
+> **Single public entry point.** Only the `web` service publishes a host port (80).
+> nginx serves the built SPA and reverse-proxies `/api` (and `/docs`) to the `api`
+> service inside the compose network. The browser is same-origin (no CORS, no
+> backend host baked into the build), and the API and database are **not** exposed
+> to the internet. All services use `restart: unless-stopped`.
+>
+> **Single worker by design.** The API runs one Uvicorn worker: signed receipts are
+> held in-process between a run and its verification, so multiple workers would not
+> share that state. Runs/events are durable in Postgres regardless.
+>
+> **TLS.** Let's Encrypt needs a domain (not a bare IP). Point a domain at the
+> instance and put Caddy or nginx + certbot in front of `web` to terminate HTTPS.
 
 ---
 
@@ -34,8 +42,8 @@ The composed stack is three services:
 1. In the Vultr portal, deploy a **Cloud Compute** instance:
    - OS: **Ubuntu 24.04 LTS**
    - Plan: any 2 vCPU / 4 GB (or larger) — **no GPU needed**.
-2. Open firewall ports **3000** (UI) and, if you want the API reachable directly,
-   **8000**. For a single-origin deployment only **3000** is required.
+2. Open firewall port **80** (HTTP). That is the only public port — the API (8000)
+   and database (5432) stay internal to the compose network.
 3. SSH into the instance and install Docker + the Compose plugin:
 
    ```bash
@@ -66,8 +74,9 @@ VULTR_CHAT_MODEL=kimi-k2-instruct
 #     "from app.trust.receipt import ReceiptService; print(ReceiptService.generate_key_b64())"
 COVENANTOPS_SIGNING_KEY_B64=<base64-ed25519-key>
 
-# Allow the browser origin (public IP or domain) for CORS if you expose the API directly
-FRONTEND_ORIGIN=http://<instance-ip>:3000
+# Same-origin via the nginx proxy, so CORS is not needed; set this only if you
+# also expose the API on its own origin.
+FRONTEND_ORIGIN=http://<instance-ip>
 ```
 
 > Everything under Vultr Serverless Inference and AIRG governance is **optional and
@@ -82,13 +91,14 @@ docker compose up --build -d
 
 | URL | What |
 | --- | --- |
-| `http://<instance-ip>:3000` | CovenantOps Agent console |
-| `http://<instance-ip>:8000/docs` | API docs (if port 8000 is open) |
+| `http://<instance-ip>/` | CovenantOps Agent console |
+| `http://<instance-ip>/api/...` | API (reverse-proxied by nginx) |
+| `http://<instance-ip>/docs` | API docs |
 
 Verify:
 
 ```bash
-curl http://<instance-ip>:3000/api/health
+curl http://<instance-ip>/api/health
 # -> {"status":"ok", ... , "vultr_inference_enabled": true, ...}  when a key is set
 docker compose ps        # db should be "healthy", api + web "Up"
 ```
@@ -139,4 +149,4 @@ docker compose up --build -d
 - No GPU is required or used; all LLM workloads go through Vultr Serverless
   Inference.
 - To put the whole app behind a single port / TLS, place a reverse proxy (nginx,
-  Caddy) in front of `web:3000` and terminate HTTPS there.
+  Caddy) in front of `web` (port 80) and terminate HTTPS there.
