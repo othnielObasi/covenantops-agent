@@ -1,0 +1,36 @@
+services:
+  api:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://covenantops:covenantops@db:5432/covenantops
+    depends_on:
+      - db
+    volumes:
+      - ./backend/data:/app/data
+
+
+  web:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+    depends_on:
+      - api
+
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=covenantops
+      - POSTGRES_PASSWORD=covenantops
+      - POSTGRES_DB=covenantops
+    ports:
+      - "5432:5432"
+    volumes:
+      - covenantops_pgdata:/var/lib/postgresql/data
+
+volumes:
+  covenantops_pgdata:

@@ -1,0 +1,138 @@
+{
+  "receipt": {
+    "receipt_version": "covenantops.receipt/v1",
+    "task_id": "task_5db3c09c6b7f",
+    "trace_id": "trace_d03a8372b1bf",
+    "agent_id": "covenantops-agent",
+    "borrower": "MERIDIAN LOGISTICS HOLDINGS LTD",
+    "facility": "USD 120,000,000 Senior Secured Term Loan Facility (Facility B)",
+    "severity": "compliant",
+    "confidence": 0.67,
+    "guard_path": "none",
+    "evidence": {
+      "clauses": [
+        {
+          "source": "credit_agreement.pdf",
+          "clause_id": "sec-6.2",
+          "title": "Interest Cover Ratio",
+          "page": 2
+        },
+        {
+          "source": "credit_agreement.pdf",
+          "clause_id": "sec-6.1",
+          "title": "Leverage Ratio",
+          "page": 2
+        },
+        {
+          "source": "credit_agreement.pdf",
+          "clause_id": "sec-7.4",
+          "title": "Equity Cure",
+          "page": 2
+        },
+        {
+          "source": "credit_agreement.pdf",
+          "clause_id": "sec-6.1",
+          "metric": "Total Net Debt / EBITDA",
+          "page": 2
+        },
+        {
+          "source": "credit_agreement.pdf",
+          "clause_id": "sec-6.2",
+          "metric": "EBITDA / Net Finance Charges",
+          "page": 2
+        },
+        {
+          "source": "credit_agreement.pdf",
+          "clause_id": "sec-6.3",
+          "metric": "Available Liquidity (USD)",
+          "page": 2
+        }
+      ],
+      "transactions": [
+        {
+          "source": "transaction_ledger",
+          "txn_id": "txn-4401",
+          "cause": "increases Total Net Debt"
+        },
+        {
+          "source": "transaction_ledger",
+          "txn_id": "txn-4402",
+          "cause": "may increase debt/reduce headroom"
+        },
+        {
+          "source": "transaction_ledger",
+          "txn_id": "txn-4407",
+          "cause": "reduces EBITDA"
+        },
+        {
+          "source": "transaction_ledger",
+          "txn_id": "txn-4401",
+          "cause": "raises Net Finance Charges"
+        },
+        {
+          "source": "transaction_ledger",
+          "txn_id": "txn-4407",
+          "cause": "reduces EBITDA"
+        },
+        {
+          "source": "transaction_ledger",
+          "txn_id": "txn-4402",
+          "cause": "reduces Available Liquidity"
+        },
+        {
+          "source": "transaction_ledger",
+          "txn_id": "txn-4411",
+          "cause": "reduces Available Liquidity"
+        },
+        {
+          "source": "transaction_ledger",
+          "txn_id": "txn-4415",
+          "cause": "increases Available Liquidity"
+        }
+      ],
+      "tool_calls": [
+        {
+          "tool": "retrieve_covenant_clauses",
+          "guard": "allow"
+        },
+        {
+          "tool": "get_filings",
+          "guard": "allow"
+        },
+        {
+          "tool": "calculate_ratio",
+          "guard": "allow"
+        },
+        {
+          "tool": "cross_check_transactions",
+          "guard": "allow"
+        },
+        {
+          "tool": "calculate_ratio",
+          "guard": "allow"
+        },
+        {
+          "tool": "cross_check_transactions",
+          "guard": "allow"
+        },
+        {
+          "tool": "calculate_ratio",
+          "guard": "allow"
+        },
+        {
+          "tool": "cross_check_transactions",
+          "guard": "allow"
+        }
+      ]
+    },
+    "memo_sha256": "a5fdd547cc9f703e9887eef527d6cd21e2cf81ba33baa8f67bdece1ee22310d1"
+  },
+  "content_sha256": "8948314bb843e03ca43e0528099b9aab3ffac6a00f0fd276922fbc5963ee3a79",
+  "signature_ed25519_b64": "oN3Pa5KBqwXSIBSiJ6RzPBgI/uxv2+4GTt7TSoz9USQoGYdVicZftwLfa3NjuDpkmOOoTehv3FOKnh9NVAlVDA==",
+  "public_key_ed25519_b64": "RL65o7PdpsqZMMkxUrgV6zoE1o/S+nRvGI4IKpVGRAE=",
+  "verification": {
+    "algorithm": "Ed25519",
+    "canonicalization": "JSON sort_keys=true, separators=(',',':'), UTF-8",
+    "instructions": "Recompute SHA-256 over the canonical encoding of 'receipt'; verify 'signature_ed25519_b64' with 'public_key_ed25519_b64'."
+  }
+}
