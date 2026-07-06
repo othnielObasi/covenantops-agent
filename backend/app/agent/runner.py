@@ -65,6 +65,10 @@ class CovenantAgent:
 
     def run(self, task_id: Optional[str] = None) -> ExecutionTrace:
         task_id = task_id or new_id("task")
+        trace_id = new_id("trace")
+        guard_owner = getattr(self.guard, "__self__", None)
+        if guard_owner is not None and hasattr(guard_owner, "set_trace_context"):
+            guard_owner.set_trace_context(trace_id)
         bid = self.borrower_id
         BORROWER = get_borrower(bid)
         FACILITY = get_facility(bid)
@@ -231,7 +235,7 @@ class CovenantAgent:
             gp = GuardPath.local_fallback
 
         trace = ExecutionTrace(
-            _id=new_id("trace"),
+            _id=trace_id,
             task_id=task_id,
             agent_id=self.agent_id,
             task_description=f"Investigate covenant drift for {FACILITY} / {BORROWER}, verify evidence, and escalate with a verifiable memo.",

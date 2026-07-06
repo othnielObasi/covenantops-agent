@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -132,9 +133,70 @@ class Governance:
         self.airg_url = (airg_url or os.environ.get("AIRG_URL") or "").rstrip("/")
         self.airg_key = airg_key or os.environ.get("AIRG_API_KEY")
         self.timeout = float(os.environ.get("AIRG_TIMEOUT_SECONDS", timeout))
-        self.agent_id = agent_id
+        self.agent_id = os.environ.get("AIRG_AGENT_ID", agent_id)
+        self.session_id = os.environ.get("AIRG_SESSION_ID", "covenantops")
+        self.org_id = os.environ.get("AIRG_ORG_ID", "")
+        self.workspace_id = os.environ.get("AIRG_WORKSPACE_ID", "")
+        self.app_id = os.environ.get("AIRG_APP_ID", "covenantops-agent")
+        self.environment = os.environ.get("AIRG_ENVIRONMENT", "production")
+        self.user_id = os.environ.get("AIRG_USER_ID", "covenantops-system")
+        self.workflow_id = os.environ.get("AIRG_WORKFLOW_ID", "loan-covenant-monitoring")
+        self.trace_id: Optional[str] = None
+        self.parent_span_id: Optional[str] = None
         self.enabled = bool(self.airg_url and self.airg_key)
         self.last_path = GuardPath.none
+
+    def set_trace_context(self, trace_id: str, parent_span_id: Optional[str] = None) -> None:
+        self.trace_id = trace_id
+        self.parent_span_id = parent_span_id
+
+    def _headers(self, request_id: str) -> Dict[str, str]:
+        headers = {
+            "X-API-Key": self.airg_key or "",
+            "Content-Type": "application/json",
+            "X-AIRG-Agent-Id": self.agent_id,
+            "X-AIRG-Session-Id": self.session_id,
+            "X-AIRG-App-Id": self.app_id,
+            "X-AIRG-Environment": self.environment,
+            "X-AIRG-User-Id": self.user_id,
+            "X-AIRG-Workflow-Id": self.workflow_id,
+            "X-Request-Id": request_id,
+        }
+        if self.org_id:
+            headers["X-AIRG-Org-Id"] = self.org_id
+        if self.workspace_id:
+            headers["X-AIRG-Workspace-Id"] = self.workspace_id
+        if self.trace_id:
+            headers["X-AIRG-Trace-Id"] = self.trace_id
+        if self.parent_span_id:
+            headers["X-AIRG-Span-Id"] = self.parent_span_id
+        return headers
+
+    def _context(self, tool: str, request_id: str) -> Dict[str, Any]:
+        context = {
+            "tool_type": "read",
+            "agent_id": self.agent_id,
+            "session_id": self.session_id,
+            "app_id": self.app_id,
+            "environment": self.environment,
+            "user_id": self.user_id,
+            "workflow_id": self.workflow_id,
+            "request_id": request_id,
+            "agent_type": "credit-risk-monitor",
+            "channel": "covenantops",
+            "domain": "finance",
+            "risk_domain": "finance",
+            "tool_family": "covenant-monitoring",
+        }
+        if self.org_id:
+            context["org_id"] = self.org_id
+        if self.workspace_id:
+            context["workspace_id"] = self.workspace_id
+        if self.trace_id:
+            context["trace_id"] = self.trace_id
+        if self.parent_span_id:
+            context["span_id"] = self.parent_span_id
+        return context
 
     def guard(self, tool: str, args: Dict[str, Any], output: Any) -> GuardResult:
         if self.enabled:
@@ -150,12 +212,14 @@ class Governance:
     def _airg_guard(self, tool: str, args: Dict[str, Any], output: Any) -> Optional[GuardResult]:
         """Call AIRG /actions/evaluate and, for document tools, /actions/scan-output.
         Returns None on ANY failure so the caller falls back to local (TR-S1)."""
-        headers = {"X-API-Key": self.airg_key, "Content-Type": "application/json"}
+        request_id = str(uuid.uuid4())
+        headers = self._headers(request_id)
+        context = self._context(tool, request_id)
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 ev = client.post(f"{self.airg_url}/actions/evaluate", headers=headers, json={
                     "tool": tool, "args": args, "agent_id": self.agent_id,
-                    "session_id": "covenantops", "context": {"tool_type": "read"},
+                    "session_id": self.session_id, "context": context,
                 })
                 ev.raise_for_status()
                 ed = ev.json()
@@ -166,6 +230,7 @@ class Governance:
                 if tool in _DOC_TOOLS:
                     sc = client.post(f"{self.airg_url}/actions/scan-output", headers=headers, json={
                         "text": _text_of(output), "agent_id": self.agent_id,
+                        "session_id": self.session_id,
                     })
                     sc.raise_for_status()
                     sd = sc.json()
